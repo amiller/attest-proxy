@@ -127,6 +127,13 @@ payload's claims flip on their own, because it probes the socket rather than
 reading config. Until promoted, bundles carry `quote: null` with an error rather
 than anything that looks attested.
 
+**Every redeploy drops the project back to `dev` and must be re-promoted.** That
+is the correct behaviour — new code has not earned the old code's attestation —
+and it means a counterparty's pinned measurements legitimately change whenever
+you ship. Expect `verify-quote` to hard-stop after a deploy until they re-audit
+and re-pin. If that is happening often, you are shipping faster than anyone can
+audit you.
+
 **The session endpoint is reachable from the internet**, so it refuses to open
 sessions unless `SESSION_TOKEN` is set, and caps calls per session. `public`
 controls listing on the daemon, not reachability — an unlisted project is still
