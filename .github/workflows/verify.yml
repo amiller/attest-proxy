@@ -1,0 +1,52 @@
+name: verify
+
+# The three implementations of these constructions must agree byte for byte, or
+# a bundle from one attester fails against another's verifier. Two of the three
+# can be checked here; the C firmware needs the board, so it is a release gate
+# rather than a CI job (see verify/README.md).
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: typecheck
+        run: deno check witness.ts server.ts
+
+      - name: client parses
+        run: python3 -m py_compile attest.py verify/check.py
+
+      - name: exhaustive structural properties + Python/TypeScript differential
+        run: python3 verify/check.py --diff
+
+      - name: the client can verify what it produces
+        run: |
+          # A partial disclosure must verify against the attested root, and a
+          # tampered one must not. This regressed once already: check silently
+          # skipped inclusion proofs and still printed "all recomputations green".
+          python3 - <<'PY'
+          import json, hashlib, subprocess, sys, base64
+          sys.path.insert(0, ".")
+          import importlib.util
+          spec = importlib.util.spec_from_file_location("attest", "attest.py")
+          m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+
+          n = 5
+          cs = [hashlib.sha256(str(i).encode()).digest() for i in range(n)]
+          meta = b"\x0bholder-only" + b"ci"
+          root = m.session_root(meta, cs)
+          for i in range(n):
+              pf = m.inclusion_proof(cs, i)
+              assert m.root_from(cs[i], i, n, pf) == m.merkle_root(cs), f"leaf {i}"
+              bad = hashlib.sha256(b"forged").digest()
+              assert m.root_from(bad, i, n, pf) != m.merkle_root(cs), f"forgery {i}"
+          print(f"inclusion proofs verify and forgeries are rejected for n={n}")
+          PY
