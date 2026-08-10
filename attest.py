@@ -66,6 +66,33 @@ def inclusion_proof(cs, i):
     return inclusion_proof(cs[k:], i - k) + [merkle_root(cs[:k])]
 
 
+def root_from(c: bytes, i: int, n: int, pf) -> bytes:
+    """Recompute the Merkle root from one commitment and its inclusion proof.
+
+    Mirrors inclusion_proof's ordering: inner siblings come first, so recurse
+    before taking this level's sibling. A proof with siblings left over is
+    rejected rather than ignored.
+    """
+    if not 0 <= i < n:
+        raise SystemExit(f"leaf index {i} outside 0..{n - 1}")
+    it = iter(pf)
+
+    def rec(m, j):
+        if m == 1:
+            return _leaf(c)
+        k = _split(m)
+        if j < k:
+            left = rec(k, j)
+            return _node(left, next(it))
+        right = rec(m - k, j - k)
+        return _node(next(it), right)
+
+    out = rec(n, i)
+    if next(it, None) is not None:
+        raise SystemExit("inclusion proof longer than the tree requires")
+    return out
+
+
 def session_root(meta: bytes, cs) -> bytes:
     meta_hash = hashlib.sha256(b"zktls-session-v2\0" + meta).digest()
     root = merkle_root(cs) if cs else b"\x00" * 32
@@ -162,6 +189,8 @@ def cmd_check(a):
     cs = [bytes.fromhex(c["commitment"]) for c in b["calls"]]
 
     for c in b["calls"]:
+        if "request_redacted" not in c:
+            continue          # a zero-content stub has nothing to recompute
         want = commitment("api.anthropic.com",
                           c["request_redacted"].encode("latin-1"),
                           base64.b64decode(c["response_b64"]))
@@ -169,11 +198,34 @@ def cmd_check(a):
             raise SystemExit(f"call {c['n']}: transcript does not match its commitment")
         print(f"  ok call {c['n']}  {c['commitment'][:16]}…")
 
-    if b.get("call_count", len(cs)) == len(cs):
+    count = b.get("call_count", len(cs))
+    if count == len(cs) and "merkle_root" not in b:
         root = session_root(meta, cs)
         if root.hex() != b["session_root"]:
             raise SystemExit(f"session root mismatch: {b['session_root']} != {root.hex()}")
         print(f"\nsession root {root.hex()} recomputes")
+    else:
+        # Partial disclosure: the withheld calls are absent by design, so the root
+        # cannot be rebuilt from what is here. Each shown call must instead prove
+        # its own membership against the attested root, and the signed count is
+        # what stops the total being understated.
+        mr = bytes.fromhex(b["merkle_root"]) if b.get("merkle_root") else b"\x00" * 32
+        for c in b["calls"]:
+            if "inclusion_proof" not in c:
+                raise SystemExit(f"call {c.get('index', '?')} has no inclusion proof")
+            got = root_from(bytes.fromhex(c["commitment"]), c["index"], count,
+                            [bytes.fromhex(x) for x in c["inclusion_proof"]])
+            if got != mr:
+                raise SystemExit(f"call {c['index'] + 1} is not in the attested tree")
+            print(f"  ok call {c['index'] + 1} of {count}  inclusion proof verified")
+        expect = hashlib.sha256(b"zktls-root-v2\0"
+                                + hashlib.sha256(b"zktls-session-v2\0" + meta).digest()
+                                + mr + count.to_bytes(4, "big")).digest()
+        if expect.hex() != b["session_root"]:
+            raise SystemExit(f"session root mismatch: {b['session_root']} != {expect.hex()}")
+        print(f"\nsession root {expect.hex()} recomputes")
+        print(f"{len(b['calls'])} of {count} calls shown, "
+              f"{count - len(b['calls'])} withheld but counted")
 
     rd = report_data(bytes.fromhex(b["session_root"]), b.get("beacon"))
     if b.get("report_data") and rd.hex() != b["report_data"]:
