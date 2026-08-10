@@ -218,6 +218,15 @@ def cmd_check(a):
             if got != mr:
                 raise SystemExit(f"call {c['index'] + 1} is not in the attested tree")
             print(f"  ok call {c['index'] + 1} of {count}  inclusion proof verified")
+        cr = b.get("complete_range")
+        if cr:
+            lo, hi = cr
+            shown = sorted(c["index"] for c in b["calls"])
+            if shown != list(range(lo, hi + 1)):
+                raise SystemExit("complete_range claimed but the shown indices are "
+                                 f"not the contiguous run {lo + 1}..{hi + 1}")
+            print(f"\ncomplete for calls {lo + 1}..{hi + 1} of {count}: leaf indices are "
+                  f"dense,\nso no call is hidden inside that range")
         expect = hashlib.sha256(b"zktls-root-v2\0"
                                 + hashlib.sha256(b"zktls-session-v2\0" + meta).digest()
                                 + mr + count.to_bytes(4, "big")).digest()
@@ -331,10 +340,28 @@ def cmd_verify_quote(a):
 
 
 def cmd_show(a):
-    """Produce what a counterparty sees: chosen calls plus inclusion proofs."""
+    """Produce what a counterparty sees: chosen calls plus inclusion proofs.
+
+    Three shapes, supporting different claims:
+      --calls 2,5   an arbitrary subset. Each shown call is provably genuine, but
+                    it says nothing about what sits between them.
+      --range 2:5   a contiguous run. Leaf indices are dense, so showing every
+                    index in the range proves nothing is hidden INSIDE it — a
+                    qualified completeness claim over that span.
+      --none        count only, no content.
+    """
     b = json.loads(Path(a.bundle).read_text())
     cs = [bytes.fromhex(c["commitment"]) for c in b["calls"]]
-    keep = [] if a.none else [int(x) for x in a.calls.split(",") if x.strip()]
+    rng = None
+    if getattr(a, "range", None):
+        lo, _, hi = a.range.partition(":")
+        lo, hi = int(lo), int(hi or lo)
+        if not 1 <= lo <= hi <= len(cs):
+            raise SystemExit(f"range {lo}:{hi} outside 1..{len(cs)}")
+        keep = list(range(lo, hi + 1))
+        rng = [lo - 1, hi - 1]
+    else:
+        keep = [] if a.none else [int(x) for x in a.calls.split(",") if x.strip()]
     disclosed = []
     for i in keep:
         c = dict(b["calls"][i - 1])
@@ -347,6 +374,10 @@ def cmd_show(a):
     out.update(kind="edge-tee partial disclosure", call_count=len(cs),
                merkle_root=merkle_root(cs).hex() if cs else None,
                calls=disclosed, withheld=len(cs) - len(disclosed))
+    if rng:
+        # The claim this disclosure makes. A verifier re-derives it from the
+        # indices rather than believing the label.
+        out["complete_range"] = rng
     Path(a.out).write_text(json.dumps(out, indent=2))
     print(f"disclosed {len(disclosed)} of {len(cs)} calls, "
           f"{out['withheld']} withheld -> {a.out}")
@@ -374,7 +405,9 @@ def main():
 
     s = sub.add_parser("show"); s.add_argument("bundle")
     g = s.add_mutually_exclusive_group(required=True)
-    g.add_argument("--calls"); g.add_argument("--none", action="store_true")
+    g.add_argument("--calls", help="arbitrary subset, e.g. 2,5")
+    g.add_argument("--range", help="contiguous run, e.g. 2:5 — claims completeness within it")
+    g.add_argument("--none", action="store_true", help="count only, no content")
     s.add_argument("-o", "--out", required=True); s.set_defaults(fn=cmd_show)
 
     a = ap.parse_args()

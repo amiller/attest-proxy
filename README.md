@@ -59,8 +59,22 @@ Tested cold on Opus, Sonnet and Haiku.
 Per-call commitments are leaves of an RFC 6962 Merkle tree.
 
 ```bash
-./attest.py show <bundle>.json --calls 2 -o partial.json   # one call, with proof
-./attest.py show <bundle>.json --none    -o stub.json      # proof only, no content
+./attest.py show <bundle>.json --calls 2,5 -o subset.json  # arbitrary calls
+./attest.py show <bundle>.json --range 2:4 -o range.json   # a contiguous run
+./attest.py show <bundle>.json --none      -o stub.json    # proof only, no content
+```
+
+The three support different claims, and the difference matters. An arbitrary
+subset proves each shown call is genuine but says nothing about what sits between
+them. A **contiguous range** additionally proves nothing is hidden *inside* it —
+leaf indices are dense, so there is no room for an undisclosed call between index
+2 and index 3. That is the qualified "here is everything in this stretch" claim,
+and a verifier re-derives it from the indices rather than trusting the label:
+
+```
+complete for calls 2..4 of 5: leaf indices are dense,
+so no call is hidden inside that range
+3 of 5 calls shown, 2 withheld but counted
 ```
 
 What the recipient sees, running the same client against a partial disclosure:
