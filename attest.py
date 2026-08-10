@@ -368,7 +368,9 @@ def cmd_show(a):
         c["index"] = i - 1
         c["inclusion_proof"] = [h.hex() for h in inclusion_proof(cs, i - 1)]
         disclosed.append(c)
-    out = {k: b[k] for k in ("purpose", "release", "session_meta_b64",
+    # verify_with travels with the disclosure: this is the artifact a stranger
+    # receives, so it is the one that most needs to say how to check itself.
+    out = {k: b[k] for k in ("verify_with", "purpose", "release", "session_meta_b64",
                              "session_root", "beacon", "report_data", "quote")
            if k in b}
     out.update(kind="edge-tee partial disclosure", call_count=len(cs),

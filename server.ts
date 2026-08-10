@@ -617,6 +617,20 @@ export default async function handler(
     sessions.delete(sess.id);
     return json({
       kind: "edge-tee attested subagent session",
+      // A receipt handed to a stranger has to say how to check itself. Without
+      // this a recipient hand-decodes the JSON, never recomputes anything, and
+      // reasonably concludes it is "internally consistent" — which is not
+      // verification. Observed with a fresh agent given a bundle cold.
+      verify_with: {
+        tool: "https://github.com/amiller/attest-proxy",
+        how: "git clone https://github.com/amiller/attest-proxy && "
+           + "python3 attest-proxy/attest.py check <this-file>",
+        also: "attest.py verify-quote <this-file> — binds the TDX quote to this "
+            + "session and diffs platform measurements against your own pin",
+        explains: "https://raw.githubusercontent.com/amiller/attest-proxy/main/skill-attest.md",
+        without_running_it: "you have NOT verified anything; the fields below are "
+                          + "only self-consistent until the commitments are recomputed",
+      },
       attester: "dstack-cvm",
       purpose: sess.purpose,
       release: { profile: sess.profile, instructed_by: sess.instructed_by },
