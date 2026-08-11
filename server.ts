@@ -1009,6 +1009,11 @@ export default async function handler(
                   + "this witness holds none and forwards yours upstream",
           "3_turn": `POST ${publicBase}/s/<your token>/turn {"text":"your answer"}`,
           "4_receipt": `GET ${publicBase}/s/<your token>/receipt`,
+          "5_if_they_stall": "Only the party that opened the thread may close it, so "
+                   + "your receipt is not immediately in your own hands. It does not "
+                   + `depend on their goodwill either: the thread seals itself after `
+                   + `${TTL_MS / 60000} minutes and the receipt becomes collectable `
+                   + "at the same URL whether or not they ever close it.",
         },
         skill: "https://raw.githubusercontent.com/amiller/attest-proxy/main/skill-roundtrip.md",
         client: "https://github.com/amiller/attest-proxy",

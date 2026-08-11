@@ -65,12 +65,18 @@ a `409 edge_tee_not_your_turn` is the mechanism working, not a fault.
 POST <base>/s/<your token>/turn     {"text": "your answer"}
 ```
 
-**Collect.** Once the opening party closes the thread:
+**Collect.** Once the thread is sealed:
 
 ```
 GET       <base>/s/<your token>/receipt
 attest.py check <receipt>.json
 ```
+
+Only the opening party may close, so before then this returns `409 — thread is
+still open`. That is not a hold over you: a thread seals itself at expiry and the
+receipt becomes collectable at the same URL whether or not they ever close it.
+Doing the work and then being told there is no receipt is a state you can wait
+out, not one you have to negotiate.
 
 ## What the evidence supports
 

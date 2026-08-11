@@ -618,11 +618,23 @@ def cmd_verify_quote(a):
 
     pin = Path(a.pin) if a.pin else Path.home() / ".claude/attest-proxy-pin.json"
     current = {k: m[k] for k in ("mrtd", "rtmr0", "rtmr1", "rtmr2", "rtmr3")}
+    # A bare tree hash is not provenance: it says the code has some identity, not
+    # which code. The verification record names the repo and commit the daemon
+    # built from, so a verifier can clone that commit and read what ran. Raised by
+    # a counterparty's agent, which found repo and commit_sha empty on a tarball
+    # deploy and concluded — correctly — that "runs the published code" was
+    # unbacked. Deploy from source, not a tarball, or this stays empty.
     try:
-        with urllib.request.urlopen(f"{a.cvm}/_api/projects/attest-proxy", timeout=30) as r:
-            current["tree_hash"] = json.loads(r.read()).get("tree_hash", "")
+        with urllib.request.urlopen(f"{a.cvm}/_api/verification/attest-proxy", timeout=30) as r:
+            src = (json.loads(r.read()).get("app") or {}).get("source") or {}
+        for k in ("repo", "ref", "commit_sha", "tree_hash"):
+            if src.get(k):
+                current[k] = src[k]
     except Exception as e:
-        print(f"could not read the source hash: {e}")
+        print(f"could not read the deployment's source provenance: {e}")
+    if not current.get("commit_sha"):
+        print("NOTE: this deployment records no commit — nothing ties the code")
+        print("      running here to any published source.")
 
     if not pin.exists():
         pin.parent.mkdir(parents=True, exist_ok=True)
@@ -634,6 +646,11 @@ def cmd_verify_quote(a):
         print("Nothing is verified yet. You have recorded what this deployment")
         print("measured today. Audit the source, then later runs are compared")
         print("against this pin and any change becomes visible.")
+        if current.get("commit_sha"):
+            print()
+            print(f"  git clone {current.get('repo')} && git checkout {current['commit_sha']}")
+            print("  is the code this deployment says it built from. Read it before")
+            print("  the pin means anything.")
         return
 
     pinned = json.loads(pin.read_text())
