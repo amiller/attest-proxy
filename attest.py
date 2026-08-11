@@ -640,6 +640,9 @@ def cmd_check(a):
           f"   model(s): {', '.join(models) or 'n/a'}")
     if not tin and not tout:
         print("         [none relayed through this witness]")
+    elif structure == "partial" or len(b["calls"]) < b.get("call_count", len(b["calls"])):
+        print(f"         [shown leaves only, not the session total: {len(b['calls'])} of "
+              f"{b.get('call_count')} leaves are in this file]")
     print("         [the provider's own figures, read out of responses this witness")
     print("          received over TLS against a pinned root]")
     if b.get("quote"):
