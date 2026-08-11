@@ -64,8 +64,42 @@ const sessions = new Map<string, Session>();
  *  this, so a token never has to carry the session id in the clear. */
 const byToken = new Map<string, { sess: Session; idx: number }>();
 /** Receipts outlive their thread: the transcripts are dropped at close, and what
- *  remains is the party-scoped record each side collects. */
+ *  remains is the party-scoped record each side collects.
+ *
+ *  Persisted, because in memory they did not survive the isolate. A responder that
+ *  had done the work and not yet collected lost the evidence permanently on any
+ *  redeploy or recycle — the one artifact the whole exchange exists to produce. */
 const receipts = new Map<string, { body: Record<string, unknown>; expires: number }>();
+let receiptStore: string | null = null;
+let receiptStoreState = "memory";
+
+async function loadReceipts(dataDir: string | undefined) {
+  if (!dataDir || receiptStore) return;
+  const path = `${dataDir}/receipts.json`;
+  try {
+    const raw = await Deno.readTextFile(path);
+    for (const [k, v] of Object.entries(JSON.parse(raw) as Record<string, {
+      body: Record<string, unknown>; expires: number }>)) receipts.set(k, v);
+    receiptStore = path;
+    receiptStoreState = "persisted";
+  } catch (e) {
+    if (e instanceof Deno.errors.NotFound) {
+      receiptStore = path;
+      receiptStoreState = "persisted";
+    } else {
+      receiptStoreState = `memory (${e instanceof Error ? e.name : "unavailable"})`;
+    }
+  }
+}
+
+async function saveReceipts() {
+  if (!receiptStore) return;
+  try {
+    await Deno.writeTextFile(receiptStore, JSON.stringify(Object.fromEntries(receipts)));
+  } catch {
+    receiptStoreState = "memory (write denied)";
+  }
+}
 
 const enc = new TextEncoder();
 
@@ -114,9 +148,9 @@ try {
  *  nothing if the other side simply never closes. Expiry is the backstop that
  *  makes the responder's evidence unilateral. Raised by a counterparty's agent,
  *  which declined to treat "they can stall indefinitely" as acceptable. */
-async function sweep() {
+async function sweep(dataDir?: string) {
   const now = Date.now();
-  for (const s of [...sessions.values()]) if (s.expires < now) await close(s);
+  for (const s of [...sessions.values()]) if (s.expires < now) await close(s, dataDir);
   for (const [k, r] of [...receipts]) if (r.expires < now) receipts.delete(k);
 }
 
@@ -197,7 +231,7 @@ async function partyReceipt(sess: Session, role: string, root: Uint8Array,
 /** Seal the thread: one root, one quote, one receipt per party. The transcripts
  *  are dropped here — after this the witness holds no copy of either side's
  *  work, only what each party was already given. */
-async function close(sess: Session) {
+async function close(sess: Session, dataDir?: string) {
   // Only a thread gets structural markers. A solo session's tree is model calls
   // and nothing else, so a close marker here would leave the verifier replaying a
   // sequence with no open marker at leaf 0 and rejecting a perfectly good bundle.
@@ -252,6 +286,8 @@ async function close(sess: Session) {
   }
   sess.turn = -1;
   sessions.delete(sess.id);
+  await loadReceipts(dataDir);
+  await saveReceipts();
 }
 
 // --- dstack broker ----------------------------------------------------------
@@ -852,7 +888,7 @@ export default async function handler(
   ctx?: { env: Record<string, string>; dataDir: string },
 ) {
   const url = new URL(req.url);
-  await sweep();
+  await sweep(ctx?.dataDir);
   // The handler sees the daemon's internal address, so an invite URL built from
   // url.origin would be unreachable. Prefer the configured public base, then the
   // forwarding headers, and only then the internal origin.
@@ -1012,7 +1048,7 @@ export default async function handler(
   if (req.method === "POST" && closing) {
     const sess = sessions.get(closing[1]);
     if (!sess) return json({ error: "unknown session" }, 404);
-    await close(sess);
+    await close(sess, ctx?.dataDir);
     return json(receipts.get(sess.parties[0].token)!.body);
   }
 
@@ -1080,7 +1116,7 @@ export default async function handler(
 
   const joinView = path.match(/^\/t\/([0-9a-f]{32})\/join$/);
   if (joinView) {
-    await sweep();
+    await sweep(ctx?.dataDir);
     const sess = sessions.get(joinView[1]);
     if (!sess) return json({ error: "unknown, closed or expired thread" }, 404);
     const quoteAvailable = await hasBroker();
@@ -1226,13 +1262,14 @@ export default async function handler(
     // Only whoever opened the thread may end it. A responder that could close
     // would be able to cut the asker's follow-up turn short.
     if (at.idx !== 0) return json({ error: "only the party that opened the thread may close it" }, 403);
-    await close(at.sess);
+    await close(at.sess, ctx?.dataDir);
     return json(receipts.get(closingParty[1])!.body);
   }
 
   const receiptPath = path.match(/^\/s\/([0-9a-f]{32})\/receipt$/);
   if (req.method === "GET" && receiptPath) {
-    await sweep();
+    await loadReceipts(ctx?.dataDir);
+    await sweep(ctx?.dataDir);
     const r = receipts.get(receiptPath[1]);
     if (r) return json(r.body);
     if (byToken.has(receiptPath[1])) {
