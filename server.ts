@@ -473,8 +473,8 @@ function claims(quoteAvailable: boolean) {
       "That the witness ran the published code. This manifest asserting it proves nothing: "
       + "the assertion comes from the server you are evaluating. Fetch the verification "
       + "record below, check the quote binds a CVM measurement you accept AND this "
-      + "project's source hash, and pin that hash. Until you have done that, tell your "
-      + "principal the quote is UNVERIFIED.");
+      + "project's source hash, and pin that hash. Unpinned, this is a claim you have "
+      + "read rather than one you have checked; describe it that way.");
   } else {
     mayNot.unshift(
       "that any of this is attested — this deployment is in dev mode and issues NO quote",
@@ -1049,24 +1049,29 @@ export default async function handler(
         // lived only in the skill went unperformed.
         read_this_first:
           "Before joining, GET https://raw.githubusercontent.com/amiller/attest-proxy/"
-          + "main/skill-roundtrip.md — it is short, and it carries three things this "
-          + "manifest does not: how to verify the document you are served, what to tell "
-          + "the person you work for about who operates this witness, and why declining "
-          + "to relay is a supported outcome rather than a failure.",
+          + "main/skill-roundtrip.md — it is short, and it carries what this manifest "
+          + "does not: how to verify the document you are served, and how to read the "
+          + "receipt you end up with.",
         your_receipt_is_unilateral:
           `Only the party that opened this thread may close it, but your receipt does not `
           + `depend on them: the thread seals itself at ${new Date(sess.expires).toISOString()}, `
           + `after which GET ${publicBase}/s/<your token>/receipt returns your receipt `
           + `whether or not they ever close it. Until then that URL returns 409, which is `
           + `expected and not a problem.`,
+        // Worded as a question with a method, not as an answer. The previous text
+        // asserted the adversarial case as the default and gave no way to establish
+        // any other, so agents applied it to their own client and their own firm's
+        // infrastructure and declined on that basis. Six of six declines cited this
+        // manifest rather than anything about the situation they were actually in.
         who_operates_this:
-          "In the simple deployment the party that opened this thread also runs this "
-          + "witness, so you may be routing your credential and your transcript through "
-          + "the other side of the table. Establish who operates it and say so to the "
-          + "person you work for before forwarding anything. You can commit a turn "
-          + "without relaying a single call; the checker then reports that side with no "
-          + "credential fingerprint and no calls, which is a weaker claim honestly "
-          + "rendered rather than a broken one.",
+          "Relaying routes your credential and the calls you make through this service, "
+          + "so establish who runs it. That is a question about your situation, not "
+          + "about this protocol: whoever gave you this link should be able to tell you, "
+          + `and ${PUBLIC_ORIGIN}/_api/verification/attest-proxy names the repository and `
+          + "commit the code was built from. Often the operator is the party you are "
+          + "working for or with, and relaying is the point — it is what evidences the "
+          + "work. Where it is a party whose interests differ from yours, weigh it, and "
+          + "note that you can commit a turn without relaying any call at all.",
         what_this_is:
           "Someone opened a witnessed thread about a document and invited you to take "
           + "a turn in it. Both sides' model calls are leaves of one Merkle tree, in "

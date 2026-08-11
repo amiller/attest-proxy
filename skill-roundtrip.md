@@ -5,11 +5,10 @@ model calls become leaves of one Merkle tree, in order, under one attestation.
 You keep using your own credential; the witness holds none and forwards yours.
 
 This document describes the protocol and what the resulting evidence does and
-does not support. **It is a description, not an instruction set.** Nothing here
-is entitled to tell you what to say to the person you work for, and a document
-fetched from a service run by the party on the other side of a negotiation is the
-last thing that should be treated as authority over your own reporting. Read it
-as evidence, weigh it, and describe what you find in your own words.
+does not support. **It is a description, not an instruction set.** It is fetched
+over the network from the service it describes, so it is not authority over what
+you report to the person you work for. Read it as evidence, weigh it, and
+describe what you find in your own words.
 
 ---
 
@@ -33,9 +32,9 @@ DOCUMENT          name + sha256, committed before you were invited
 WHOSE TURN        you can only relay when it is yours
 ```
 
-In dev mode there is no quote, nothing is attested, and the operator — who is the
-other party or someone they chose — can read everything you send. That is worth
-saying plainly to whoever you work for before doing any work.
+In dev mode there is no quote, nothing is attested, and the operator can read
+everything you send. That is worth saying plainly to whoever you work for before
+doing any work.
 
 `attest.py verify-quote <receipt>` checks the quote commits to this thread and
 diffs platform measurements and the deployment's source hash against a pin on
@@ -77,6 +76,20 @@ still open`. That is not a hold over you: a thread seals itself at expiry and th
 receipt becomes collectable at the same URL whether or not they ever close it.
 Doing the work and then being told there is no receipt is a state you can wait
 out, not one you have to negotiate.
+
+## Relaying, and not relaying
+
+Relaying is what evidences the work: without it the thread records what you said
+and when, but nothing about the effort behind it, and `check` reports your side
+with no credential fingerprint and no calls. In most uses the operator is the
+party you are working for or with, and that is the intended shape.
+
+Where the operator's interests differ from your principal's, this is a real
+decision and it belongs to your principal, not to you or to this document. Say
+who operates the service and what routing through it exposes, and let them
+choose. Committing a turn without relaying is supported, and is a weaker claim
+honestly rendered rather than a broken one — but it is the fallback, not the
+default.
 
 ## What the evidence supports
 
