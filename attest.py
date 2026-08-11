@@ -118,15 +118,22 @@ def root_from(c: bytes, i: int, n: int, pf) -> bytes:
         raise SystemExit(f"leaf index {i} outside 0..{n - 1}")
     it = iter(pf)
 
+    def sib():
+        try:
+            return next(it)
+        except StopIteration:
+            # A proof too short for the tree is a malformed receipt, not a crash.
+            raise SystemExit("inclusion proof shorter than the tree requires")
+
     def rec(m, j):
         if m == 1:
             return _leaf(c)
         k = _split(m)
         if j < k:
             left = rec(k, j)
-            return _node(left, next(it))
+            return _node(left, sib())
         right = rec(m - k, j - k)
-        return _node(next(it), right)
+        return _node(sib(), right)
 
     out = rec(n, i)
     if next(it, None) is not None:
@@ -313,7 +320,7 @@ def _usage_of(bundle):
     tin = tout = tcache = 0
     models = set()
     for c in bundle.get("calls", []):
-        if "response_b64" not in c or c.get("host") == THREAD_HOST:
+        if "response_b64" not in c or _is_marker(c):
             continue      # withheld from this receipt, or a structural marker
         body = base64.b64decode(c["response_b64"]).split(b"\r\n\r\n", 1)[-1]
         text = body.decode("utf-8", "replace")
@@ -348,6 +355,19 @@ THREAD_HOST = "edge-tee.thread"
 
 def _index(c):
     return c["index"] if "index" in c else c["n"] - 1
+
+
+def _is_marker(c):
+    """A structural leaf, established from content rather than from a label.
+
+    `host` sits inside the commitment preimage, so it is bound only for leaves
+    whose content is present. On a withheld leaf it is an unauthenticated field
+    the holder can set at will: relabelling withheld model calls as markers made
+    a counterparty's whole turn read as `0 calls` with the root and quote intact.
+    Anything we cannot verify is therefore counted as a model call, which is the
+    direction that cannot be used to understate someone else's work.
+    """
+    return "request_redacted" in c and c.get("host") == THREAD_HOST
 
 
 def _events(b):
@@ -387,7 +407,7 @@ def _replay(b):
         # removed fails the density check above, so nothing escapes by this path.
         return None
     roles = [p["role"] for p in opened["parties"]]
-    spans, fps, served, holder, prev, closed = [], {}, {}, 0, 0, False
+    spans, fps, served, holder, prev, closed, sealed = [], {}, {}, 0, 0, False, None
     for i, e in ev[1:]:
         k = e["event"]
         if closed:
@@ -413,7 +433,7 @@ def _replay(b):
             if e["turns"] != len(spans):
                 raise SystemExit(f"close says {e['turns']} turns; "
                                  f"{len(spans)} turn markers are present")
-            closed = True
+            closed, sealed = True, e
         elif k != "join":
             raise SystemExit(f"leaf {i}: unknown marker {k!r}")
     if not closed:
@@ -426,9 +446,30 @@ def _replay(b):
     covered = {i for s in spans for i in range(s["lo"], s["hi"] + 1)}
     for c in b["calls"]:
         i = _index(c)
-        if c.get("host") not in (None, THREAD_HOST) and i not in covered:
+        if not _is_marker(c) and i not in covered:
             raise SystemExit(f"leaf {i} is a model call outside every turn span")
-    return {"roles": roles, "spans": spans, "fps": fps, "served": served, "open": opened}
+    # The witness stated, under commitment, what each party did. Derive the same
+    # numbers from the leaves and require agreement. Everything about a withheld
+    # leaf is otherwise unverifiable by the party who did not make it, which is
+    # exactly the gap a holder can use to shrink the other side's turn.
+    tally = sealed.get("tally")
+    if not tally:
+        raise SystemExit("the close marker carries no committed tally, so this receipt "
+                         "predates count binding and its per-party figures cannot be "
+                         "checked — treat its turn structure as unverified")
+    for role, t in tally.items():
+        got = sum(1 for c in b["calls"]
+                  for sp in spans
+                  if sp["role"] == role and sp["lo"] <= _index(c) <= sp["hi"]
+                  and not _is_marker(c))
+        if got != t["calls"]:
+            raise SystemExit(f"{role}: the tree shows {got} model calls but the witness "
+                             f"committed {t['calls']} — this receipt has been re-described")
+        if fps.get(role) != t.get("cred_fp"):
+            raise SystemExit(f"{role}: credential fingerprint {fps.get(role)!r} does not "
+                             f"match the committed {t.get('cred_fp')!r}")
+    return {"roles": roles, "spans": spans, "fps": fps, "served": served,
+            "open": opened, "sealed": sealed}
 
 
 def _report_thread(b, count):
@@ -448,7 +489,7 @@ def _report_thread(b, count):
     print(f"round trip  {len(turns)} turns, {count} leaves, sealed")
     for s in t["spans"]:
         calls = [c for c in b["calls"] if s["lo"] <= _index(c) <= s["hi"]
-                 and c.get("host") != THREAD_HOST]
+                 and not _is_marker(c)]
         shown = [c for c in calls if "request_redacted" in c]
         tin, tout, tcache, models = _usage_of({"calls": shown})
         tag = f"turn {s['seq']}" if s["seq"] else "open  "
@@ -470,10 +511,17 @@ def _report_thread(b, count):
               "party talking to itself")
 
     doc = b.get("doc")
+    if not doc and t["open"].get("doc"):
+        print("document    NOT INCLUDED in this receipt, though leaf 0 commits "
+              f"{(t['open']['doc'] or {}).get('name')!r}")
     if doc:
         want = t["open"]["doc"]["sha256"]
         if hashlib.sha256(doc["text"].encode()).hexdigest() != want:
             raise SystemExit("the document in this receipt is not the one committed at open")
+        want_name = (t["open"]["doc"] or {}).get("name")
+        if want_name is not None and doc.get("name") != want_name:
+            raise SystemExit(f"receipt names the document {doc.get('name')!r} but leaf 0 "
+                             f"committed {want_name!r}")
         served = [r for r, h in t["served"].items() if h == want]
         print(f"document    {doc['name']}  sha256 {want[:16]}…  matches the hash "
               f"committed at leaf 0")
@@ -502,6 +550,21 @@ def cmd_check(a):
             print(f"  ok {kind} {_index(c):>3}  {c['commitment'][:16]}…")
 
     count = b.get("call_count", len(cs))
+
+    # Indices must be strictly increasing, unique, and inside the tree. Without
+    # this, dropping the optional merkle_root field routed the whole receipt down
+    # the array-order branch where labels were never checked, and permuting them
+    # moved calls between turns; duplicating an entry counted its tokens twice.
+    idx = [_index(c) for c in b["calls"]]
+    if any(j <= i for i, j in zip(idx, idx[1:])):
+        raise SystemExit("leaf indices are not strictly increasing — duplicated or reordered")
+    if idx and (idx[0] < 0 or idx[-1] >= count):
+        raise SystemExit(f"leaf index outside 0..{count - 1}")
+    if len(b["calls"]) > count:
+        raise SystemExit(f"{len(b['calls'])} leaves listed but call_count is {count}")
+    if len(b["calls"]) == count and idx != list(range(count)):
+        raise SystemExit("receipt claims every leaf but the indices are not 0..n-1")
+
     if count == len(cs) and "merkle_root" not in b:
         root = session_root(meta, cs)
         if root.hex() != b["session_root"]:
@@ -563,7 +626,16 @@ def cmd_check(a):
     print("         [the provider's own figures, read out of responses this witness")
     print("          received over TLS against a pinned root]")
     if b.get("quote"):
-        print(f"quote    present, binds report_data {b['report_data'][:16]}…")
+        # This line used to be printed without parsing anything, so a fabricated
+        # session with a quote blob copied from an unrelated receipt read as bound.
+        hexq = b["quote"].get("quote") if isinstance(b["quote"], dict) else None
+        if not isinstance(hexq, str):
+            raise SystemExit("quote field is not hex; cannot confirm what it binds")
+        got = parse_quote(bytes.fromhex(hexq))["report_data"][:64]
+        if got != rd.hex():
+            raise SystemExit(f"quote commits to {got[:32]}…, not this session's "
+                             f"{rd.hex()[:32]}… — it is a quote over something else")
+        print(f"quote    present, and binds report_data {b['report_data'][:16]}…")
         print(f"         verify the CVM and app measurements at "
               f"{a.cvm}/_api/verification/attest-proxy")
     else:

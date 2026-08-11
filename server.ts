@@ -200,7 +200,23 @@ async function close(sess: Session) {
   // and nothing else, so a close marker here would leave the verifier replaying a
   // sequence with no open marker at leaf 0 and rejecting a perfectly good bundle.
   if (sess.parties.length > 1) {
-    await marker(sess, "close", { turns: sess.seq, leaves: sess.calls.length + 1 });
+    // The close marker states, under commitment, what each party actually did.
+    // Everything else about a withheld leaf is unverifiable by the party who did
+    // not make it, so without this a holder can re-describe the other side's turn
+    // — relabelling their calls made a real 3-call turn read as "0 calls, no
+    // credential fingerprint", with the root and the quote genuine throughout.
+    const tally: Record<string, unknown> = {};
+    for (const p of sess.parties) {
+      tally[p.role] = {
+        calls: sess.owner.filter((o, i) => o === p.role
+                                        && sess.calls[i].host !== THREAD_HOST).length,
+        cred_fp: p.cred_fp,
+      };
+    }
+    await marker(sess, "close", {
+      turns: sess.seq, leaves: sess.calls.length + 1, tally,
+      doc: sess.doc && { name: sess.doc.name, sha256: sess.doc.sha256 },
+    });
   }
   const cs = sess.calls.map((c) =>
     Uint8Array.from(c.commitment.match(/../g)!.map((h) => parseInt(h, 16))));
