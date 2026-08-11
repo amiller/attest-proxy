@@ -5,9 +5,16 @@ The agent gets no credential. This opens a session on the interposer, points the
 agent at it, closes the session to collect a signed bundle, and can recheck that
 bundle offline afterwards.
 
-  attest.py run    --purpose "[research-router] my matter" -- claude -p "..."
+  attest.py run    --purpose "my matter" -- claude -p "..."
   attest.py check  bundle.json
   attest.py show   bundle.json --calls 2      # what a counterparty would see
+
+Two parties taking turns on one document, each on their own subscription:
+
+  attest.py ask    --purpose "..." --doc msa.md -- claude -p "..."   # prints an invite
+  attest.py join   "<invite-url>#<token>"       -- claude -p "..."   # their side
+  attest.py close  <handle>                     # asker seals it
+  attest.py receipt <handle>                    # either side collects theirs
 
 Needs only Python's standard library. CVM and INVITE come from the environment
 or flags:
@@ -19,6 +26,9 @@ import os, sys, json, time, base64, hashlib, argparse, subprocess, urllib.reques
 from pathlib import Path
 
 DEFAULT_CVM = os.environ.get("ATTEST_CVM", "https://pod.dstack.soc1024.com")
+# Path the app is mounted at on the CVM. Set ATTEST_PREFIX="" to talk to a
+# server running standalone, e.g. `deno run server.ts` in local development.
+APP = os.environ.get("ATTEST_PREFIX", "/attest-proxy")
 
 
 def post(url, body=None, token=None):
@@ -29,6 +39,37 @@ def post(url, body=None, token=None):
         req.add_header("authorization", f"Bearer {token}")
     with urllib.request.urlopen(req, timeout=120) as r:
         return json.loads(r.read())
+
+
+def get(url, token=None):
+    req = urllib.request.Request(url)
+    if token:
+        req.add_header("authorization", f"Bearer {token}")
+    with urllib.request.urlopen(req, timeout=120) as r:
+        return json.loads(r.read())
+
+
+def run_agent(cmd, base_url, extra=None):
+    """Run the caller's agent against a witness base_url, echoing and capturing.
+
+    The agent keeps using its own credential; only the endpoint changes. Its
+    output is captured because a turn ends with a stated deliverable, and that
+    deliverable is whatever the agent concluded.
+    """
+    if extra:
+        cmd = cmd[:-1] + [cmd[-1] + extra]
+        print(f"[attest] appended to the prompt: {extra.strip()}")
+    # Only the endpoint changes. Claude Code sends its own subscription bearer to
+    # a custom base URL unprompted (verified against a header sniffer), so setting
+    # ANTHROPIC_AUTH_TOKEN here would replace the very credential being witnessed
+    # and make "each party spent their own" false.
+    env = dict(os.environ, ANTHROPIC_BASE_URL=base_url)
+    p = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, text=True)
+    out = []
+    for line in p.stdout:
+        sys.stdout.write(line)
+        out.append(line)
+    return p.wait(), "".join(out).strip()
 
 
 # --- the constructions the interposer attests (mirror of host/frames.py) ------
@@ -109,39 +150,156 @@ def report_data(root: bytes, beacon) -> bytes:
 
 # --- commands ---------------------------------------------------------------
 
+def _cmd_after_dashdash(a):
+    cmd = a.cmd[1:] if a.cmd and a.cmd[0] == "--" else a.cmd
+    if not cmd:
+        raise SystemExit("give a command after --, e.g. -- claude -p '...'")
+    return cmd
+
+
+def _beacon_line(s, what):
+    if s.get("beacon"):
+        print(f"[attest] {what}  not before drand round {s['beacon']['round']}")
+    else:
+        print(f"[attest] {what}  no timestamp beacon (drand unreachable)")
+
+
 def cmd_run(a):
     invite = a.invite or os.environ.get("ATTEST_INVITE", "")
     if not invite:
         raise SystemExit("no invite token: set ATTEST_INVITE or pass --invite")
-    cmd = a.cmd[1:] if a.cmd and a.cmd[0] == "--" else a.cmd
-    if not cmd:
-        raise SystemExit("give a command after --, e.g. -- claude -p '...'")
+    cmd = _cmd_after_dashdash(a)
 
-    s = post(f"{a.cvm}/attest-proxy/session", {
+    s = post(f"{a.cvm}{APP}/session", {
         "purpose": a.purpose, "profile": a.profile,
         "instructed_by": a.instructed_by}, token=invite)
-    sid, tok = s["session_id"], s["auth_token"]
-    if s.get("beacon"):
-        print(f"[attest] session {sid[:12]}…  not before drand round {s['beacon']['round']}")
-    else:
-        print(f"[attest] session {sid[:12]}…  no timestamp beacon (drand unreachable)")
+    sid = s["session_id"]
+    _beacon_line(s, f"session {sid[:12]}…")
 
-    env = dict(os.environ,
-               ANTHROPIC_BASE_URL=f"{a.cvm}/attest-proxy",
-               ANTHROPIC_AUTH_TOKEN=tok, ANTHROPIC_API_KEY=tok)
     t0 = time.time()
     try:
-        rc = subprocess.run(cmd, env=env).returncode
+        rc, _ = run_agent(cmd, s["base_url"])
     finally:
-        bundle = post(f"{a.cvm}/attest-proxy/session/{sid}/close")
+        bundle = post(f"{a.cvm}{APP}/session/{sid}/close")
         out = Path(a.out or f"attest-{sid[:12]}.json")
         out.write_text(json.dumps(bundle, indent=2))
-        print(f"\n[attest] {bundle['call_count']} calls in {time.time()-t0:.1f}s "
-              f"-> {out}")
+        n = sum(1 for c in bundle["calls"] if c.get("host") != THREAD_HOST)
+        print(f"\n[attest] {n} model calls in {time.time()-t0:.1f}s "
+              f"({bundle['call_count']} leaves incl. markers) -> {out}")
         if bundle.get("quote_error"):
             print(f"[attest] no quote: {bundle['quote_error']}")
             print("[attest] the project is in dev mode; promote it for real attestation")
     return rc
+
+
+# --- round trip -------------------------------------------------------------
+
+def _handle(a, path=None):
+    p = Path(path or a.handle)
+    if not p.exists():
+        raise SystemExit(f"no such thread handle: {p}")
+    return json.loads(p.read_text())
+
+
+def _end_turn(cvm, token, text, role):
+    if not text:
+        raise SystemExit(f"the {role} produced no output, so there is nothing to commit "
+                         "as a turn; pass --text to state the deliverable explicitly")
+    r = post(f"{cvm}{APP}/s/{token}/turn", {"text": text})
+    print(f"[attest] turn {r['turn_closed']} closed — {r['leaves']} leaves, "
+          f"now {r['now']}'s move")
+
+
+def cmd_ask(a):
+    """Open a thread about a document, take the first turn, hand over an invite."""
+    invite = a.invite or os.environ.get("ATTEST_INVITE", "")
+    if not invite:
+        raise SystemExit("no invite token: set ATTEST_INVITE or pass --invite")
+    cmd = _cmd_after_dashdash(a)
+    doc = Path(a.doc)
+    t = post(f"{a.cvm}{APP}/thread", {
+        "purpose": a.purpose, "profile": a.profile,
+        "instructed_by": a.instructed_by,
+        "responder_label": a.responder,
+        "doc": {"name": doc.name, "text": doc.read_text()}}, token=invite)
+    tid = t["thread_id"]
+    _beacon_line(t, f"thread {tid[:12]}…")
+    print(f"[attest] document {t['doc']['name']}  sha256 {t['doc']['sha256'][:16]}…  "
+          f"{t['doc']['bytes']} bytes")
+
+    brief = Path(f"attest-thread-{tid[:8]}.doc-{doc.name}")
+    brief.write_text(doc.read_text())
+    rc, out = run_agent(cmd, t["asker"]["base_url"],
+                        extra=f"\n\nThe document under discussion is at {brief}.")
+    _end_turn(a.cvm, t["asker"]["token"], a.text or out, "asker")
+
+    h = Path(a.out or f"attest-thread-{tid[:8]}.json")
+    h.write_text(json.dumps({"cvm": a.cvm, "thread_id": tid, "role": "asker",
+                             "token": t["asker"]["token"],
+                             "invite_url": t["responder"]["invite_url"]}, indent=2))
+    print(f"\n[attest] handle  {h}")
+    print(f"[attest] invite  {t['responder']['invite_url']}")
+    print("[attest] send that URL. The token after the # is never sent to the server "
+          "on a page load.")
+    return rc
+
+
+def cmd_join(a):
+    """Take a turn in someone else's thread, on your own subscription."""
+    cmd = _cmd_after_dashdash(a)
+    base, _, frag = a.url.partition("#")
+    token = a.token or frag
+    if not token:
+        raise SystemExit("no invite token: it is the part of the URL after the #, "
+                         "or pass --token")
+    j = post(base, token=token)
+    if j["turn"] != "yours":
+        raise SystemExit(f"it is not your turn yet (waiting on the {j['turn']} side)")
+    print(f"[attest] joined as {j['party']} — {j['purpose']!r}")
+    print(f"[attest] document {j['doc']['name']}  sha256 {j['doc']['sha256'][:16]}…")
+
+    tid = base.rstrip("/").split("/")[-2]
+    stem = f"attest-thread-{tid[:8]}"
+    docf = Path(f"{stem}.doc-{j['doc']['name']}")
+    docf.write_text(j["doc"]["text"])
+    if hashlib.sha256(j["doc"]["text"].encode()).hexdigest() != j["doc"]["sha256"]:
+        raise SystemExit("the document does not match the hash the thread committed to")
+    print(f"[attest] document hash matches what was committed before you joined")
+
+    askf = Path(f"{stem}.asked.md")
+    askf.write_text("\n\n".join(f"## turn {t['seq']} — {t['role']}\n\n{t['text']}"
+                               for t in j["prior_turns"]) or "(nothing committed yet)")
+    cvm = base.split(f"{APP}/t/" if APP else "/t/")[0]
+    rc, out = run_agent(cmd, j["base_url"],
+                        extra=f"\n\nThe document is at {docf} and what they asked is "
+                              f"at {askf}. Read both first.")
+    _end_turn(cvm, token, a.text or out, "responder")
+
+    h = Path(a.out or f"{stem}.responder.json")
+    h.write_text(json.dumps({"cvm": cvm, "thread_id": tid, "role": j["party"],
+                             "token": token}, indent=2))
+    print(f"\n[attest] handle {h}  —  receipt available once they close the thread")
+    return rc
+
+
+def cmd_close(a):
+    h = _handle(a)
+    if h["role"] != "asker":
+        raise SystemExit("only the party that opened the thread may close it")
+    r = post(f"{h['cvm']}{APP}/s/{h['token']}/close")
+    out = Path(a.out or str(Path(a.handle).with_suffix("")) + ".receipt.json")
+    out.write_text(json.dumps(r, indent=2))
+    print(f"[attest] closed — {r['call_count']} leaves -> {out}")
+    if r.get("quote_error"):
+        print(f"[attest] no quote: {r['quote_error']}")
+
+
+def cmd_receipt(a):
+    h = _handle(a)
+    r = get(f"{h['cvm']}{APP}/s/{h['token']}/receipt")
+    out = Path(a.out or str(Path(a.handle).with_suffix("")) + ".receipt.json")
+    out.write_text(json.dumps(r, indent=2))
+    print(f"[attest] {r['for_party']} receipt, {r['call_count']} leaves -> {out}")
 
 
 def _usage_of(bundle):
@@ -155,6 +313,8 @@ def _usage_of(bundle):
     tin = tout = tcache = 0
     models = set()
     for c in bundle.get("calls", []):
+        if "response_b64" not in c or c.get("host") == THREAD_HOST:
+            continue      # withheld from this receipt, or a structural marker
         body = base64.b64decode(c["response_b64"]).split(b"\r\n\r\n", 1)[-1]
         text = body.decode("utf-8", "replace")
         events = []
@@ -183,6 +343,147 @@ def _usage_of(bundle):
     return tin, tout, tcache, sorted(models)
 
 
+THREAD_HOST = "edge-tee.thread"
+
+
+def _index(c):
+    return c["index"] if "index" in c else c["n"] - 1
+
+
+def _events(b):
+    """The structural leaves, decoded. They are ordinary leaves of the same tree,
+    committed with the same construction — only the host differs."""
+    out = []
+    for c in b["calls"]:
+        if c.get("host") != THREAD_HOST or "request_redacted" not in c:
+            continue
+        out.append((_index(c), json.loads(c["request_redacted"].encode("latin-1").decode())))
+    return out
+
+
+def _replay(b):
+    """Derive the turn structure from the marker leaves, refusing anything
+    ill-formed. Nothing here reads a party label off a leaf — there is none. A
+    span is a party's because only the turn holder could relay into it, and the
+    markers that delimit it are committed at fixed, dense indices.
+    """
+    ev = _events(b)
+    if not ev:
+        return None                      # a single-party session, not a thread
+    n = b["call_count"]
+    # Every structural claim below — turn spans, per-span call counts, who moved
+    # when — assumes the leaves are all here. Drop one and the span it sat in
+    # silently shrinks, which is exactly the understatement the count binding is
+    # supposed to prevent. Inclusion proofs alone do NOT catch this: the ones that
+    # remain still verify. So density is checked, and a partial disclosure gets no
+    # structural reading at all rather than a quietly wrong one.
+    if {_index(c) for c in b["calls"]} != set(range(n)):
+        return {"partial": True}
+    i0, opened = ev[0]
+    if i0 != 0 or opened["event"] != "open":
+        # A single-party session also carries a marker (its credential
+        # fingerprint), so "there are markers" does not mean "this is a thread".
+        # Only an open marker at leaf 0 does. A thread with its open marker
+        # removed fails the density check above, so nothing escapes by this path.
+        return None
+    roles = [p["role"] for p in opened["parties"]]
+    spans, fps, served, holder, prev, closed = [], {}, {}, 0, 0, False
+    for i, e in ev[1:]:
+        k = e["event"]
+        if closed:
+            raise SystemExit(f"leaf {i}: a marker follows the close marker")
+        if k == "turn":
+            if e["role"] != roles[holder]:
+                raise SystemExit(f"leaf {i}: {e['role']} ended a turn that belonged "
+                                 f"to {roles[holder]}")
+            if hashlib.sha256(e["text"].encode()).hexdigest() != e["text_sha256"]:
+                raise SystemExit(f"leaf {i}: turn text does not match its committed hash")
+            spans.append({"role": e["role"], "seq": e["seq"], "lo": prev + 1, "hi": i,
+                          "text": e["text"]})
+            prev, holder = i, (holder + 1) % len(roles)
+        elif k == "cred":
+            if e["role"] in fps:
+                raise SystemExit(f"leaf {i}: a second credential fingerprint for {e['role']}")
+            fps[e["role"]] = e["fingerprint"]
+        elif k == "serve":
+            served[e["to"]] = e["doc_sha256"]
+        elif k == "close":
+            if i != n - 1:
+                raise SystemExit(f"close marker at leaf {i}, but the tree has {n} leaves")
+            if e["turns"] != len(spans):
+                raise SystemExit(f"close says {e['turns']} turns; "
+                                 f"{len(spans)} turn markers are present")
+            closed = True
+        elif k != "join":
+            raise SystemExit(f"leaf {i}: unknown marker {k!r}")
+    if not closed:
+        raise SystemExit("no close marker — this thread was never sealed")
+    if prev < n - 2:                      # calls made after the last committed turn
+        spans.append({"role": roles[holder], "seq": None, "lo": prev + 1, "hi": n - 2,
+                      "text": None})
+
+    # Every model call must fall inside exactly one span, or attribution has a hole.
+    covered = {i for s in spans for i in range(s["lo"], s["hi"] + 1)}
+    for c in b["calls"]:
+        i = _index(c)
+        if c.get("host") not in (None, THREAD_HOST) and i not in covered:
+            raise SystemExit(f"leaf {i} is a model call outside every turn span")
+    return {"roles": roles, "spans": spans, "fps": fps, "served": served, "open": opened}
+
+
+def _report_thread(b, count):
+    """Render the round trip, having derived it rather than been told it."""
+    t = _replay(b)
+    if not t:
+        return
+    print()
+    if t.get("partial"):
+        print("round trip  leaves are missing from this file, so NO turn structure is")
+        print("            established: a deleted leaf shrinks the span it sat in and")
+        print("            every remaining inclusion proof still verifies. What holds")
+        print("            is per-leaf membership and the total count, nothing more.")
+        print()
+        return "partial"
+    turns = [s for s in t["spans"] if s["seq"]]
+    print(f"round trip  {len(turns)} turns, {count} leaves, sealed")
+    for s in t["spans"]:
+        calls = [c for c in b["calls"] if s["lo"] <= _index(c) <= s["hi"]
+                 and c.get("host") != THREAD_HOST]
+        shown = [c for c in calls if "request_redacted" in c]
+        tin, tout, tcache, models = _usage_of({"calls": shown})
+        tag = f"turn {s['seq']}" if s["seq"] else "open  "
+        usage = (f"{tin} in / {tout} out / {tcache} cached   {', '.join(models) or 'n/a'}"
+                 if shown else "[content withheld from this receipt]")
+        print(f"  {tag}  {s['role']:<10} leaves {s['lo']}..{s['hi']:<4} "
+              f"{len(calls)} calls   {usage}")
+
+    fps = t["fps"]
+    missing = [r for r in t["roles"] if r not in fps]
+    if len(set(fps.values())) == len(fps) and not missing:
+        print("parties     " + "  ".join(f"{r} fp {fps[r][:12]}…" for r in t["roles"])
+              + "  — distinct credentials")
+    elif missing:
+        print(f"parties     no credential fingerprint for {', '.join(missing)} "
+              "— they committed no model call")
+    else:
+        print("parties     SAME credential fingerprint on both sides — this is one "
+              "party talking to itself")
+
+    doc = b.get("doc")
+    if doc:
+        want = t["open"]["doc"]["sha256"]
+        if hashlib.sha256(doc["text"].encode()).hexdigest() != want:
+            raise SystemExit("the document in this receipt is not the one committed at open")
+        served = [r for r, h in t["served"].items() if h == want]
+        print(f"document    {doc['name']}  sha256 {want[:16]}…  matches the hash "
+              f"committed at leaf 0")
+        print(f"            served by the witness to: {', '.join(served) or 'nobody'}")
+    print("attribution no leaf carries a party label; spans are derived from the")
+    print("            markers, and only the turn holder could relay into one")
+    print()
+    return "thread"
+
+
 def cmd_check(a):
     b = json.loads(Path(a.bundle).read_text())
     meta = base64.b64decode(b["session_meta_b64"])
@@ -191,12 +492,14 @@ def cmd_check(a):
     for c in b["calls"]:
         if "request_redacted" not in c:
             continue          # a zero-content stub has nothing to recompute
-        want = commitment("api.anthropic.com",
+        want = commitment(c.get("host", "api.anthropic.com"),
                           c["request_redacted"].encode("latin-1"),
                           base64.b64decode(c["response_b64"]))
         if want.hex() != c["commitment"]:
-            raise SystemExit(f"call {c['n']}: transcript does not match its commitment")
-        print(f"  ok call {c['n']}  {c['commitment'][:16]}…")
+            raise SystemExit(f"leaf {_index(c)}: content does not match its commitment")
+        if "merkle_root" not in b:      # otherwise the proof loop reports it
+            kind = "marker" if c.get("host") == THREAD_HOST else "call  "
+            print(f"  ok {kind} {_index(c):>3}  {c['commitment'][:16]}…")
 
     count = b.get("call_count", len(cs))
     if count == len(cs) and "merkle_root" not in b:
@@ -216,8 +519,11 @@ def cmd_check(a):
             got = root_from(bytes.fromhex(c["commitment"]), c["index"], count,
                             [bytes.fromhex(x) for x in c["inclusion_proof"]])
             if got != mr:
-                raise SystemExit(f"call {c['index'] + 1} is not in the attested tree")
-            print(f"  ok call {c['index'] + 1} of {count}  inclusion proof verified")
+                raise SystemExit(f"leaf {c['index']} is not in the attested tree")
+            tag = ("marker" if c.get("host") == THREAD_HOST else "call") \
+                if "request_redacted" in c else "withheld"
+            print(f"  ok leaf {c['index']:>3} of {count}  in tree, {tag}"
+                  + ("" if tag == "withheld" else ", content matches its commitment"))
         cr = b.get("complete_range")
         if cr:
             lo, hi = cr
@@ -233,12 +539,17 @@ def cmd_check(a):
         if expect.hex() != b["session_root"]:
             raise SystemExit(f"session root mismatch: {b['session_root']} != {expect.hex()}")
         print(f"\nsession root {expect.hex()} recomputes")
-        print(f"{len(b['calls'])} of {count} calls shown, "
-              f"{count - len(b['calls'])} withheld but counted")
+        content = sum(1 for c in b["calls"] if "request_redacted" in c)
+        absent = count - len(b["calls"])
+        print(f"{content} of {count} leaves shown with content, "
+              f"{count - content} withheld but counted"
+              + (f" ({absent} absent entirely)" if absent else ""))
 
     rd = report_data(bytes.fromhex(b["session_root"]), b.get("beacon"))
     if b.get("report_data") and rd.hex() != b["report_data"]:
         raise SystemExit("report_data does not bind this root and beacon")
+
+    structure = _report_thread(b, count)
 
     tin, tout, tcache, models = _usage_of(b)
     print(f"purpose  {b['purpose']!r}")
@@ -257,7 +568,13 @@ def cmd_check(a):
               f"{a.cvm}/_api/verification/attest-proxy")
     else:
         print(f"quote    ABSENT ({b.get('quote_error')}) — nothing here is attested yet")
-    print("\nall recomputations green")
+    if structure == "partial":
+        print("\nrecomputations green for the leaves present — but leaves are missing,")
+        print("so the turn structure is NOT established and no span count here is a count")
+    elif structure == "thread":
+        print("\nall recomputations green — turn structure established")
+    else:
+        print("\nall recomputations green")
 
 
 # --- TDX v4 quote, structural parse ------------------------------------------
@@ -398,6 +715,31 @@ def main():
     r.add_argument("--invite"); r.add_argument("--out")
     r.add_argument("cmd", nargs=argparse.REMAINDER)
     r.set_defaults(fn=cmd_run)
+
+    k = sub.add_parser("ask", help="open a witnessed thread about a document and take turn 1")
+    k.add_argument("--purpose", required=True)
+    k.add_argument("--doc", required=True, help="the document both parties work on")
+    k.add_argument("--profile", default="holder-only",
+                   choices=["holder-only", "aggregate-only", "dual-delivery"])
+    k.add_argument("--responder", default="responder", help="label for the other party")
+    k.add_argument("--text", help="commit this as the turn deliverable instead of "
+                                  "the agent's output")
+    k.add_argument("--instructed-by", default="")
+    k.add_argument("--invite"); k.add_argument("--out")
+    k.add_argument("cmd", nargs=argparse.REMAINDER); k.set_defaults(fn=cmd_ask)
+
+    j = sub.add_parser("join", help="take a turn in someone else's thread")
+    j.add_argument("url", help="the invite URL; the token is the part after the #")
+    j.add_argument("--token", help="if your shell ate the fragment")
+    j.add_argument("--text", help="commit this instead of the agent's output")
+    j.add_argument("--out")
+    j.add_argument("cmd", nargs=argparse.REMAINDER); j.set_defaults(fn=cmd_join)
+
+    cl = sub.add_parser("close", help="seal the thread and collect your receipt")
+    cl.add_argument("handle"); cl.add_argument("--out"); cl.set_defaults(fn=cmd_close)
+
+    rc = sub.add_parser("receipt", help="fetch your party-scoped receipt")
+    rc.add_argument("handle"); rc.add_argument("--out"); rc.set_defaults(fn=cmd_receipt)
 
     c = sub.add_parser("check"); c.add_argument("bundle"); c.set_defaults(fn=cmd_check)
 

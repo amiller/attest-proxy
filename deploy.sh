@@ -29,7 +29,7 @@ MAX_CALLS="${MAX_CALLS:-50}"
 
 umask 077
 TGZ=$(mktemp --suffix=.tgz); MF=$(mktemp)
-tar czf "$TGZ" -C "$DIR" server.ts project.json
+tar czf "$TGZ" -C "$DIR" server.ts witness.ts project.json
 SESSION_TOKEN="$SESSION_TOKEN" KEY="$KEY" MAX_CALLS="$MAX_CALLS" python3 -c "
 import json, os
 print(json.dumps({'name':'attest-proxy','runtime':'deno',

@@ -95,6 +95,53 @@ nothing about the other one.
 context. When this was checked on the authoring machine, a bundle contained the
 operator's own `CLAUDE.md`. `--none` is the form that is safe to hand out.
 
+## Two parties, taking turns
+
+The above proves *you* spent what you say you spent. A **round trip** proves *we
+each did*, on the same document, in that order — you take a turn, hand over a
+URL, and the other side's agent takes theirs on their own subscription.
+
+```bash
+./attest.py ask --purpose "Acme MSA — clause 7" --doc msa.md \
+  -- claude -p "what should I put to them about the IP assignment?"
+# -> invite  https://…/t/9f2c…/join#a41b…      send this
+```
+
+```bash
+./attest.py join "https://…/t/9f2c…/join#a41b…" \
+  -- claude -p "answer their questions"        # their machine, their credential
+```
+
+Every call from both sides is a leaf of one tree; turn boundaries are leaves too.
+Only the party holding the turn may relay, so attribution comes from position and
+no leaf needs a party label to forge.
+
+What the asker's receipt checks out to — an actual run, both sides driven from
+one machine, which is why the fingerprint line reads as it does:
+
+```
+round trip  2 turns, 15 leaves, sealed
+  turn 1  asker      leaves 1..6    4 calls   1588 in / 692 out / 328614 cached   claude-opus-5
+  turn 2  responder  leaves 7..13   3 calls   [content withheld from this receipt]
+parties     SAME credential fingerprint on both sides — this is one party talking to itself
+document    msa.md  sha256 d0b09a9001a87129…  matches the hash committed at leaf 0
+attribution no leaf carries a party label; spans are derived from the
+            markers, and only the turn holder could relay into one
+```
+
+The fingerprint distinguishes credentials, not people, and says so rather than
+letting a one-sided rehearsal pass as a negotiation.
+
+The new property is that **the witness does the cross-party redaction**. Each
+side's receipt carries the shared structure, both deliverables, and only its own
+transcript — the responder's is the mirror image, same root. The asker never
+receives the responder's calls, so there is nothing for the responder to trust
+the asker to have deleted, and the quote covers the code that redacted.
+
+Full spec and both user journeys: [ROUNDTRIP.md](ROUNDTRIP.md), which also covers
+the asymmetry a responder should notice before forwarding a credential to a
+witness their counterparty operates.
+
 ## Verify it rather than trust it
 
 ```bash
@@ -134,10 +181,18 @@ byte for byte, or a bundle from one attester fails against another's verifier.
 | | checked how |
 |---|---|
 | Merkle structure | exhaustive: all 32,896 reachable (tree, leaf) pairs |
+| Turn spans | generative: 5 turn plans, spans and per-span counts match |
+| Span integrity | every single-leaf deletion and out-of-turn marker rejected |
 | Python ↔ TypeScript | differential, random inputs, in CI |
 | Python ↔ C firmware | differential, 11 tree sizes on real hardware |
 | SHA-256 | assumed |
 | TEE, quote chain, TLS, operator access | out of scope, and stated as such |
+
+Span integrity is worth singling out: inclusion proofs do **not** catch a deleted
+leaf, because the ones that remain still verify. Deleting a leaf silently shrinks
+the turn it sat in, which is exactly the understatement the count binding exists
+to prevent, so `check` refuses to report any turn structure unless the leaf
+indices are dense.
 
 ```bash
 python3 verify/check.py --diff

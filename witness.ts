@@ -30,7 +30,18 @@ export const hex = (b: Uint8Array) => [...b].map((x) => x.toString(16).padStart(
 
 // latin-1: one byte per code unit, so raw bytes survive a round-trip through a
 // string. The Python side stores request_redacted the same way.
-export const latin1 = (b: Uint8Array) => String.fromCharCode(...b);
+//
+// Chunked because String.fromCharCode takes its input as arguments, and spreading
+// a whole request body overflows the argument limit — a real agent turn carrying
+// a document is comfortably past it, and the failure is a RangeError from deep
+// inside the relay rather than anything that names the cause.
+export const latin1 = (b: Uint8Array) => {
+  let s = "";
+  for (let i = 0; i < b.length; i += 0x8000) {
+    s += String.fromCharCode(...b.subarray(i, i + 0x8000));
+  }
+  return s;
+};
 export const unlatin1 = (s: string): Uint8Array<ArrayBuffer> =>
   concat(Uint8Array.from([...s].map((c) => c.charCodeAt(0))));
 
@@ -60,6 +71,19 @@ export async function merkleRoot(leaves: Uint8Array[]): Promise<Uint8Array<Array
   return await sha256(new Uint8Array([1]),
                       await merkleRoot(leaves.slice(0, k)),
                       await merkleRoot(leaves.slice(k)));
+}
+
+/** Siblings needed to recompute the root from leaf i, innermost first. The
+ *  witness needs this to hand one party a receipt in which the other party's
+ *  calls appear as commitments only — the redaction happens here, under the
+ *  quote, rather than being left to whoever holds the transcript. */
+export async function inclusionProof(leaves: Uint8Array[], i: number): Promise<Uint8Array[]> {
+  if (leaves.length === 1) return [];
+  const k = split(leaves.length);
+  if (i < k) {
+    return [...await inclusionProof(leaves.slice(0, k), i), await merkleRoot(leaves.slice(k))];
+  }
+  return [...await inclusionProof(leaves.slice(k), i - k), await merkleRoot(leaves.slice(0, k))];
 }
 
 export async function sessionRoot(meta: Uint8Array, leaves: Uint8Array[]): Promise<Uint8Array<ArrayBuffer>> {

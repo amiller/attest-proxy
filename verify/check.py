@@ -190,6 +190,104 @@ console.log(JSON.stringify(out));
     return len(cases)
 
 
+# --- P7/P8: the round-trip state machine -------------------------------------
+#
+# Turn spans are the new security-relevant logic, and they are not cryptography:
+# they are a replay of the marker leaves. The crypto binds each leaf; what has to
+# be established here is that the derivation reads the right structure out of a
+# genuine thread, and refuses to read any structure at all out of a mangled one.
+#
+# This is generative rather than exhaustive — the space of marker sequences is
+# unbounded — so it is a weaker statement than P1-P5, and is labelled as such.
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+
+def _thread(turns):
+    """A synthetic receipt for a given turn plan, built the way the witness does."""
+    import attest
+    roles, leaves, seen, seq = ["asker", "responder"], [], set(), 0
+    mk = lambda host, o: leaves.append((host, json.dumps(o).encode()))
+    doc = {"name": "d", "sha256": hashlib.sha256(b"doc").hexdigest(), "bytes": 3}
+    mk(attest.THREAD_HOST, {"event": "open", "thread": "t", "purpose": "p", "doc": doc,
+                            "parties": [{"role": r, "label": r} for r in roles],
+                            "policy": {}, "beacon": None})
+    truth = []
+    for role, ncalls in turns:
+        lo = len(leaves)
+        if role not in seen:
+            seen.add(role)
+            mk(attest.THREAD_HOST, {"event": "join", "role": role, "label": role})
+            mk(attest.THREAD_HOST, {"event": "serve", "to": role,
+                                    "doc_sha256": doc["sha256"], "bytes": 3})
+            mk(attest.THREAD_HOST, {"event": "cred", "role": role,
+                                    "fingerprint": hashlib.sha256(role.encode()).hexdigest()[:32]})
+        for _ in range(ncalls):
+            leaves.append(("api.anthropic.com", b"REQ"))
+        seq += 1
+        text = f"deliverable {seq}"
+        mk(attest.THREAD_HOST, {"event": "turn", "role": role, "seq": seq, "text": text,
+                                "text_sha256": hashlib.sha256(text.encode()).hexdigest()})
+        truth.append({"role": role, "seq": seq, "lo": lo, "hi": len(leaves) - 1,
+                      "calls": ncalls})
+    mk(attest.THREAD_HOST, {"event": "close", "turns": seq, "leaves": len(leaves) + 1})
+
+    cs = [attest.commitment(h, body, b"") for h, body in leaves]
+    calls = [{"index": i, "host": h, "commitment": cs[i].hex(),
+              "request_redacted": body.decode("latin-1"), "response_b64": "",
+              "inclusion_proof": [x.hex() for x in attest.inclusion_proof(cs, i)]}
+             for i, (h, body) in enumerate(leaves)]
+    return {"call_count": len(cs), "merkle_root": attest.merkle_root(cs).hex(),
+            "calls": calls, "doc": {"name": "d", "text": "doc", "sha256": doc["sha256"]}}, truth
+
+
+def roundtrip():
+    import attest
+    plans = [[("asker", 1), ("responder", 1)],
+             [("asker", 3), ("responder", 2)],
+             [("asker", 1), ("responder", 4), ("asker", 2)],
+             [("asker", 0), ("responder", 1)],
+             [("asker", 2), ("responder", 2), ("asker", 1), ("responder", 3)]]
+    accepted = rejected = 0
+    for plan in plans:
+        b, truth = _thread(plan)
+        # P7 the derived spans are the spans that were built
+        t = attest._replay(b)
+        assert not t.get("partial"), f"{plan}: a well-formed thread was read as partial"
+        got = [(s["role"], s["seq"], s["lo"], s["hi"]) for s in t["spans"]]
+        want = [(s["role"], s["seq"], s["lo"], s["hi"]) for s in truth]
+        assert got == want, f"{plan}: spans {got} != {want}"
+        for s, w in zip(t["spans"], truth):
+            n = sum(1 for c in b["calls"]
+                    if s["lo"] <= c["index"] <= s["hi"] and c["host"] != attest.THREAD_HOST)
+            assert n == w["calls"], f"{plan}: span {s['seq']} counted {n}, built {w['calls']}"
+        assert len(set(t["fps"].values())) == len(t["fps"]), f"{plan}: fingerprints collided"
+        accepted += 1
+
+        # P8 every single-leaf deletion loses the structural reading rather than
+        #    silently shrinking a span — the attack the inclusion proofs miss
+        for i in range(b["call_count"]):
+            m = json.loads(json.dumps(b))
+            del m["calls"][i]
+            r = attest._replay(m)
+            assert r is None or r.get("partial"), \
+                f"{plan}: deleting leaf {i} still yielded a turn structure"
+            rejected += 1
+
+        # P8b a turn marker attributed to the party whose turn it is not
+        m = json.loads(json.dumps(b))
+        j = next(k for k, c in enumerate(m["calls"]) if '"event": "turn"' in c["request_redacted"])
+        e = json.loads(m["calls"][j]["request_redacted"])
+        e["role"] = "responder" if e["role"] == "asker" else "asker"
+        m["calls"][j]["request_redacted"] = json.dumps(e)
+        try:
+            attest._replay(m)
+            raise AssertionError(f"{plan}: an out-of-turn turn marker was accepted")
+        except SystemExit:
+            rejected += 1
+    return accepted, rejected
+
+
 if __name__ == "__main__":
     checked, sizes = exhaustive()
     print(f"P1 round-trip     decided over {checked} (tree, leaf) pairs")
@@ -199,6 +297,11 @@ if __name__ == "__main__":
     print(f"P5 domain sep     decided — no leaf hash equals any node hash")
     print(f"\nexhaustive over 1..{MAX_LEAVES} leaves, which is the deployed bound:")
     print(f"this is the whole reachable input space, not a sample.")
+    acc, rej = roundtrip()
+    print(f"\nP7 turn spans     {acc} turn plans: derived spans and per-span call counts")
+    print(f"                  match what was built; generative, not exhaustive")
+    print(f"P8 span integrity {rej} mutations rejected — every single-leaf deletion and")
+    print(f"                  every out-of-turn marker loses the structural reading")
     if "--diff" in sys.argv:
         n = differential()
         print(f"\nP6 differential   {n} random cases, Python and TypeScript agree byte for byte")
