@@ -654,7 +654,7 @@ const esc = (s: string) =>
 
 // --- landing page -----------------------------------------------------------
 
-function landing(state: { sessions: number; keyed: boolean; gated: boolean }) {
+function landing(state: { sessions: number; keyed: boolean; gated: boolean; attested: boolean }) {
   const badge = (ok: boolean, yes: string, no: string) =>
     ok ? `<span class="ok">${yes}</span>` : `<span class="no">${no}</span>`;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"/>
@@ -697,7 +697,7 @@ what you spent and on what, without showing the transcript.</p>
 <tr><th>open sessions</th><td>${state.sessions}</td></tr>
 <tr><th>credential</th><td><span class="ok">none held — you bring your own</span></td></tr>
 <tr><th>session gate</th><td>${badge(state.gated, "invite token required", "closed — no SESSION_TOKEN set")}</td></tr>
-<tr><th>attestation</th><td><a href="../_api/verification/attest-proxy">/_api/verification/attest-proxy</a></td></tr>
+<tr><th>attestation</th><td>${badge(state.attested, "attested — quotes issued over each root", "dev — NO quote is issued; nothing here is proof")}<br/><a href="../_api/verification/attest-proxy">/_api/verification/attest-proxy</a></td></tr>
 </tbody></table>
 
 <h2>Use it</h2>
@@ -712,6 +712,25 @@ ANTHROPIC_AUTH_TOKEN=sess_... \\
   claude -p "review this contract"
 
 curl -X POST $CVM/attest-proxy/session/&lt;id&gt;/close</pre>
+
+<h2>Two parties, taking turns</h2>
+<p>A <em>thread</em> is the same machinery with more than one party: a shared document, and
+every model call from either side a leaf of one tree, in order. Turn boundaries are leaves too.
+Only the party holding the turn may relay, so attribution comes from position — no leaf carries
+a party label, and there is nothing to forge.</p>
+<pre>curl -X POST $CVM/attest-proxy/thread \\
+  -H "Authorization: Bearer $INVITE" \\
+  -d '{"purpose":"Acme MSA — clause 7","doc":{"name":"msa.md","text":"..."}}'
+# -> asker.base_url, and an invite_url whose #fragment is the other party's token
+
+POST $CVM/attest-proxy/s/&lt;token&gt;/turn   {"text":"your question"}
+GET  $CVM/attest-proxy/s/&lt;token&gt;/receipt</pre>
+<p>Each side's receipt carries the shared structure, both turn deliverables, and <em>only its
+own</em> transcript — the other party's calls appear as commitments with inclusion proofs. That
+redaction happens in here, under the quote, so neither party has to trust the other to have done
+it. <a href="https://github.com/amiller/attest-proxy/blob/main/ROUNDTRIP.md">The spec</a> covers
+both journeys, and the asymmetry a responder should weigh before forwarding a credential to a
+witness their counterparty operates.</p>
 
 <h2>What a bundle proves</h2>
 <p>Token counts and the model name come back inside Anthropic's own response, over a TLS
@@ -728,7 +747,7 @@ measurement they accept <em>and</em> the source hash of this app, then pin that 
 operator holds deploy rights, so pinning and re-checking is what makes a swap visible rather
 than silent.</p>
 
-<footer>dev mode — quotes are unavailable until the project is promoted to attested</footer>
+<footer>${state.attested ? "attested — a redeploy resets this to dev until re-promoted" : "dev mode — quotes are unavailable until this project is promoted to attested"}</footer>
 </div></body></html>`;
 }
 
@@ -757,7 +776,8 @@ export default async function handler(
   if (path === "/" || path === "/health") {
     const gated = cfg(ctx, "SESSION_TOKEN").length > 0;
     if (path === "/" && (req.headers.get("accept") ?? "").includes("text/html")) {
-      return new Response(landing({ sessions: sessions.size, keyed: false, gated }),
+      return new Response(landing({ sessions: sessions.size, keyed: false, gated,
+                                    attested: await hasBroker() }),
         { headers: { "content-type": "text/html; charset=utf-8" } });
     }
     return json({
