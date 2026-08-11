@@ -1,230 +1,161 @@
-# Attested round trip
+# Evidence of AI effort on a specific matter
 
-Two people, two subscriptions, one document, taking turns — with a receipt that
-neither of them could have forged and neither has to trust the other to redact.
+A client engages a firm. The firm bills for "AI-assisted review". Neither side
+can currently settle the obvious question.
 
-The single-party product proves *you* spent what you say you spent. This proves
-*we each did*, on the same thing, in that order.
+The client cannot tell a real investigation from someone pasting the document
+into a chat window once. The firm cannot answer by handing over its working: the
+transcript carries other clients' matters, its own method, and everything the
+agent read along the way.
+
+A **round trip** gives both sides the same short record instead. The client opens
+a thread holding the brief and the document; the firm joins, does the work on its
+own subscription routed through the witness, and commits its advice. Both end up
+with:
+
+```
+turn 1  client    leaves 1..1   0 calls
+turn 2  counsel   leaves 2..9   4 calls   1698 in / 2271 out / 329848 cached   claude-opus-5
+document  schedule-b.md  sha256 368655a1a1d939d7…  matches the hash committed at leaf 0
+not before  drand round 6368198
+quote  present, and binds report_data 268fb2a63d009b5c…
+```
+
+The token figures arrive **inside Anthropic's own response**, over a TLS session
+terminated inside the enclave. They are the provider's numbers, not the firm's,
+so the client does not have to take the firm's word for them. They are committed
+at close, so the firm cannot restate them either.
 
 ---
 
-## What a round trip is
+## Journey 1 — the client
 
-A **thread** is one witnessed workspace with a shared document and more than one
-party. Every model call either side makes is a leaf of one RFC 6962 tree, in
-order. Turn boundaries are leaves too. One root, one quote.
-
-```
-0  OPEN     purpose, sha256 of the document, the policy
-1  CRED     asker's credential fingerprint
-2  call     asker's agent, on the asker's subscription
-3  call
-4  TURN     asker ends turn 1, question committed
-5  JOIN     responder joins with the invite token
-6  SERVE    the witness served the document to the responder — these exact bytes
-7  CRED     responder's credential fingerprint — a different one
-8  call     responder's agent, on the responder's subscription
-9  call
-10 TURN     responder ends turn 2, answer committed
-11 CLOSE    2 turns, 12 leaves
-```
-
-Only the party whose turn it is may relay. That single rule is what makes
-attribution provable rather than asserted: leaves 8–9 sit between the
-responder's JOIN and the responder's TURN, indices are dense, and the witness
-would have refused a call from anyone else in that span. Nobody has to believe a
-label on a leaf — the position *is* the label.
-
-## The two things that are new
-
-**Turn order is provable.** Leaf indices are dense and the tree binds the count,
-so "the responder answered after seeing the question" is a structural fact, not a
-timestamp anyone can move. Neither party can retroactively insert work, reorder
-turns, or claim more turns than the tree holds.
-
-**Cross-party redaction is done by the attested code.** Each party's receipt
-carries the shared structure, both turn deliverables, and *their own* transcript
-in full — the other party's model calls are present only as commitments with
-inclusion proofs. The asker never receives the responder's transcript, so there
-is nothing for the responder to have to trust the asker to have deleted. In the
-single-party product the holder redacts; here the witness does, and the quote
-covers the code that did it.
-
-## What it proves
-
-- Two distinct credentials were used, one per party (fingerprints differ)
-- Both parties were served the same document, by sha256
-- Turn order, and that each party's calls fall inside its own turn
-- Each party's token spend and model, from the provider's own responses
-- Neither party can understate its call count, having disclosed nothing
-
-## What it does not prove
-
-- **That the two credentials are two people.** One person can hold two
-  subscriptions. The fingerprint distinguishes credentials, nothing more.
-- **That either side read anything.** SERVE proves the witness handed over those
-  bytes. A party can *choose* to prove it read them, by disclosing the leaf whose
-  request body contains the document.
-- **That the advice was any good, or was about the contract.** No checker runs
-  here ([#1](https://github.com/amiller/attest-proxy/issues/1)).
-- **Confidentiality from the operator.** Both transcripts and both credentials
-  pass through the witness. Attestation says which code ran; it does not blind
-  the operator.
-
-## The asymmetry a responder should notice
-
-The asker opens the thread, and in the simple deployment the asker also runs the
-witness. So the responder is being asked to route their own credential and their
-own transcript through a service operated by the party across the table.
-
-A fresh agent, given nothing but the invite URL and told to act for the Client,
-worked this out and declined:
-
-> I did not set `ANTHROPIC_BASE_URL` and forwarded no credential. Sending a
-> long-lived key to an unattested endpoint supplied by a negotiating counterparty
-> is not a trade worth making for a call-count metric.
-
-That is the correct call against a **dev-mode** deployment, and it is the reason
-the mode is reported before anything else. Three things bear on it:
-
-- **Attestation is the whole answer, and only when checked.** A verified quote
-  plus a pinned source hash establishes that the code handling the credential is
-  the published code. Unpinned, or in dev mode, there is nothing.
-- **Declining to relay is a supported outcome, not a failure.** A party can
-  commit a turn deliverable without relaying a single call. The thread then
-  evidences *what was said and in what order*, but not how much work went into
-  it, and `check` shows that side with no credential fingerprint and no calls.
-  That is a weaker claim, honestly rendered, rather than a broken one.
-- **A neutral operator removes the problem** and nothing in the protocol assumes
-  otherwise: the witness is addressed by URL, and both parties are equally
-  clients of it.
-
-The same agent also observed that only the asker may close, so a stalling asker
-could leave the responder with no receipt after doing the work. Threads now seal
-themselves at expiry, which makes the responder's receipt unilateral.
-
----
-
-## Journey 1 — the asker
-
-You have a contract and a counterparty. You want advice on it, you want their
-advice on it, and you want a record that both happened without publishing either
-side's thinking.
+You are paying for the work and you want to know it happened, against *your*
+document, before you settle the invoice.
 
 ```bash
 export ATTEST_CVM=https://pod.dstack.soc1024.com
 export ATTEST_INVITE=<your invite token>
 
-./attest.py ask --purpose "Acme MSA — IP clause" --doc msa.md \
-  -- claude -p "read the doc and draft the three questions I should put to them"
+./attest.py ask --purpose "Engagement 4417 — Schedule B review before Friday" \
+  --doc schedule-b.md --responder "outside counsel" \
+  --text "We sign Friday. Which clauses do we push back on, in priority order?"
 ```
 
-Your agent runs on your own subscription against the witness. When it finishes,
-its output becomes the committed question ending your turn, and you get a URL:
+Your brief and the document are committed before anyone is invited, so the firm
+cannot later answer a different question, and cannot claim it reviewed a
+different draft. You get a URL to send:
 
 ```
-[attest] thread eb0c576a8d0a…  not before drand round 6367735
-[attest] document msa.md  sha256 d0b09a9001a87129…  678 bytes
-[attest] turn 1 closed — 7 leaves, now responder's move
-[attest] handle  attest-thread-eb0c576a.json
-[attest] invite  http://…/t/eb0c576a…/join#19db8da1…
+invite  https://pod.dstack.soc1024.com/attest-proxy/t/e04dc257…/join#4a96f1a2…
 ```
 
-Send the URL. It is safe to paste: it carries a call cap, it expires, and it
-grants nothing but a turn in this thread.
+The token is the `#fragment`. Browsers never transmit it, so the page cannot see
+it and neither can anyone reading the server's logs.
 
-When they are done:
+When the work is delivered:
 
 ```bash
-./attest.py close attest-thread-eb0c576a.json
-./attest.py check attest-thread-eb0c576a.receipt.json
+./attest.py close attest-thread-e04dc257.json
+./attest.py check attest-thread-e04dc257.receipt.json
+./attest.py verify-quote attest-thread-e04dc257.receipt.json
 ```
 
-```
-round trip  2 turns, 15 leaves, sealed
-  turn 1  asker      leaves 1..6    4 calls   1588 in / 735 out / 329234 cached   claude-opus-5
-  turn 2  responder  leaves 7..13   3 calls   [content withheld from this receipt]
-parties     SAME credential fingerprint on both sides — this is one party talking to itself
-document    msa.md  sha256 d0b09a9001a87129…  matches the hash committed at leaf 0
-            served by the witness to: responder
-attribution no leaf carries a party label; spans are derived from the
-            markers, and only the turn holder could relay into one
+You see the call count, the token totals, the model, the document hash and the
+ordering. You do not see the firm's transcript, and you never receive it: the
+witness withholds it before your receipt is issued.
 
-quote    present, binds report_data e5666e6bbad288d0…
+## Journey 2 — the firm
 
-all recomputations green — turn structure established
-```
-
-The responder's receipt is the mirror image: same `session_root`, same quote,
-turn 2 in full and turn 1 withheld. Checked on the live deployment — the two
-receipts share a root and a quote, their model-call content is disjoint, and
-neither party's prompt appears in the other's file.
-
-That fingerprint line is from a real run with both sides on one machine. With two
-subscriptions it reads `asker fp …  responder fp …  — distinct credentials`; the
-check reports what it found rather than what the layout implies.
-
-## Journey 2 — the responder
-
-You get a link from someone you are negotiating with. You are not installing
-their software and you are not sending them your transcript.
-
-Hand the URL to your agent:
-
-```
-Read https://pod.dstack.soc1024.com/attest-proxy/t/eb0c576a…/join and follow it.
-Tell me what this is and what it does and does not prove before doing any work.
-```
-
-Your agent fetches a manifest describing the protocol and pointing at
-`skill-roundtrip.md`. It reports back what mode the deployment is in, joins, and
-is served the document. Then it works — **on your subscription, with your
-credential**; the witness holds no key and forwards yours upstream.
+You are billing for the work and you want it evidenced, without surrendering your
+working papers.
 
 ```bash
-./attest.py join "https://pod.dstack.soc1024.com/attest-proxy/t/eb0c576a…/join#19db8da1…" \
-  -- claude -p "answer their questions about the IP clause"
+./attest.py join "https://…/t/e04dc257…/join#4a96f1a2…" \
+  -- claude -p "priority order of clauses to push back on, under 120 words"
 ```
 
-Ending your turn commits your answer. You then hold a receipt of your own:
+Your agent is served the document, rehashes it against the hash committed before
+you arrived, and works on **your own subscription** — the witness holds no
+credential and forwards yours. Ending your turn commits the advice.
 
 ```bash
-./attest.py receipt attest-thread-eb0c576a.responder.json
+./attest.py receipt attest-thread-e04dc257.responder.json
 ```
 
-It shows the same root, the same turn structure, the same document hash — and
-*your* transcript in full, with the asker's calls as commitments only. You can
-disclose from it exactly as in the single-party product: an arbitrary subset, a
-contiguous range with its completeness claim, or `--none`.
+Your receipt carries your transcript in full, and the client's leaves as
+commitments only. Same root, same quote, same committed figures.
 
-The asymmetry worth noticing: you can prove you did the work without showing it,
-and you can prove they asked before you answered. Neither of you had to agree in
-advance to trust the other's redaction, because neither of you performed it.
+### Proving you read it, without publishing what you thought
+
+The receipt shows effort, not attention. If that becomes the argument, disclose
+one call:
+
+```bash
+./attest.py show <receipt> --calls 9 -o proof-of-reading.json
+```
+
+The disclosed call carries the clause text verbatim in its prompt, with an
+inclusion proof against the attested root. Your advice, and every other call,
+stay out of the file. What the client can check:
+
+```
+1 of 11 leaves shown with content, 10 withheld but counted
+usage  [shown leaves only, not the session total: 1 of 11 leaves are in this file]
+session root 95e4b09aeef4c7c1… recomputes
+```
+
+You can refuse to show anything. You cannot show a doctored call, or understate
+how many there were.
 
 ---
 
-## Verified live
+## Why the figures are worth anything
 
-Run end to end against `pod.dstack.soc1024.com` in attested mode, commit
-`27fdd4c5b1d1`: both turns relayed, thread sealed, both receipts collected. The
-two receipts share a `session_root` and a quote, their model-call content is
-disjoint, and neither party's prompt appears in the other's file. The quote's
-`report_data` binds that root.
+One mechanism, and it is the reason this is not just a log the operator writes.
 
-`verify-quote` pins the platform measurements together with the repo and commit
-the daemon built from, and prints the `git clone … && git checkout …` line for
-that commit — a pin is worth only the audit behind it, and a bare tree hash
-corresponds to nothing you can read.
+Every model call from either side is a leaf of one RFC 6962 Merkle tree, and so
+are the turn boundaries, committed with the same construction and differing only
+in the host. Three things follow:
 
-## Verify it rather than trust it
+- **The figures are the provider's.** Usage is read out of Anthropic's response
+  inside the enclave. A firm inflating its own numbers would have to forge
+  Anthropic's response body, which is committed.
+- **Neither side can restate them afterwards.** Per-party call counts, token
+  totals and model names are committed in the closing leaf. The verifier derives
+  the same numbers from the tree and refuses the receipt if they disagree.
+- **Calls are attributed by position, not by a label.** Only the party holding
+  the turn may relay, leaf indices are dense, and the markers delimit the spans.
+  No leaf carries a party name, so there is nothing to forge.
 
-Same as the single-party path, and it is the same verifier:
+The root is bound into a TDX quote. `verify-quote` checks the quote commits to
+this session, then diffs the platform measurements and the deployment's repo and
+commit against a pin on your machine, and prints the `git clone … && git checkout
+…` line for the code it says it ran. First run pins and verifies nothing; a pin
+is worth only the audit behind it.
 
-```bash
-python3 attest.py check <receipt>          # commitments, proofs, root, turn structure
-python3 attest.py verify-quote <receipt>   # bind the quote, diff against your pin
-python3 verify/check.py --diff             # the constructions themselves
-```
+## What it does not prove
 
-`check` replays the marker leaves as a state machine and derives the turn spans
-itself. It does not read a party label off a leaf; there is none to read.
+- **That the advice was any good, or even on topic.** Nothing reads the
+  transcript. Token counts are effort, not quality
+  ([#1](https://github.com/amiller/attest-proxy/issues/1)).
+- **Confidentiality from the operator.** Both transcripts and both credentials
+  pass through the witness. Attestation establishes which code runs; it does not
+  blind whoever runs it. Establish who operates the instance before routing
+  through it. Usually it is the party you are working for, which is the intended
+  shape; where it is not, that is a decision for your principal.
+- **That two credentials are two people.** One person can hold two
+  subscriptions. `check` reports whether the fingerprints actually differ.
+- **That the firm read anything**, unless it chooses to prove it as above.
+- **An upper bound on when it ran.** A drand round gives a lower bound only.
+
+## Operational notes
+
+A thread seals itself at expiry, so the firm's receipt does not depend on the
+client ever closing it. Receipts are persisted and survive a restart; **open
+threads are not** and die with the isolate, so a turn in flight when the service
+restarts has to be redone.
+
+Every redeploy resets the project to dev and must be re-promoted, so a
+counterparty's pin legitimately changes whenever you ship
+([dstack-webhost#105](https://github.com/amiller/dstack-webhost/issues/105)).

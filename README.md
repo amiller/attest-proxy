@@ -95,52 +95,42 @@ nothing about the other one.
 context. When this was checked on the authoring machine, a bundle contained the
 operator's own `CLAUDE.md`. `--none` is the form that is safe to hand out.
 
-## Two parties, taking turns
+## Two parties, one matter
 
-The above proves *you* spent what you say you spent. A **round trip** proves *we
-each did*, on the same document, in that order — you take a turn, hand over a
-URL, and the other side's agent takes theirs on their own subscription.
+The above proves *you* spent what you say you spent. A **round trip** answers a
+different question: a client is paying a firm for "AI-assisted review" and cannot
+tell a real investigation from someone pasting the document into a chat window
+once, and the firm cannot answer by handing over working papers that carry other
+clients' matters.
 
-```bash
-./attest.py ask --purpose "Acme MSA — clause 7" --doc msa.md \
-  -- claude -p "what should I put to them about the IP assignment?"
-# -> invite  https://pod.dstack.soc1024.com/attest-proxy/t/eb0c576a…/join#19db8da1…      send this
+The client opens a thread holding the brief and the document. The firm joins,
+works on its own subscription routed through the witness, and commits its advice.
+Both sides end up with the same short record:
+
+```
+turn 1  client    leaves 1..1   0 calls
+turn 2  counsel   leaves 2..9   4 calls   1698 in / 2271 out / 329848 cached   claude-opus-5
+document  schedule-b.md  sha256 368655a1a1d939d7…  matches the hash committed at leaf 0
+quote  present, and binds report_data 268fb2a63d009b5c…
 ```
 
 ```bash
-./attest.py join "https://pod.dstack.soc1024.com/attest-proxy/t/eb0c576a…/join#19db8da1…" \
-  -- claude -p "answer their questions"        # their machine, their credential
+./attest.py ask --purpose "Engagement 4417" --doc schedule-b.md --text "..."
+# -> invite  https://…/t/e04dc257…/join#4a96f1a2…      send this
+
+./attest.py join "https://…/t/e04dc257…/join#4a96f1a2…" \
+  -- claude -p "which clauses do we push back on?"     # their machine, their credential
 ```
 
-Every call from both sides is a leaf of one tree; turn boundaries are leaves too.
-Only the party holding the turn may relay, so attribution comes from position and
-no leaf needs a party label to forge.
+The token counts come from inside Anthropic's own response over TLS terminated in
+the enclave, so they are the provider's figures rather than the firm's, and they
+are committed at close so the firm cannot restate them. The firm's transcript
+never reaches the client: the witness withholds it before the client's receipt is
+issued. If attention rather than effort becomes the argument, the firm can
+disclose a single call carrying the clause text verbatim, with its advice still
+withheld.
 
-What the asker's receipt checks out to — an actual run, both sides driven from
-one machine, which is why the fingerprint line reads as it does:
-
-```
-round trip  2 turns, 15 leaves, sealed
-  turn 1  asker      leaves 1..6    4 calls   1588 in / 735 out / 329234 cached   claude-opus-5
-  turn 2  responder  leaves 7..13   3 calls   [content withheld from this receipt]
-parties     SAME credential fingerprint on both sides — this is one party talking to itself
-document    msa.md  sha256 d0b09a9001a87129…  matches the hash committed at leaf 0
-attribution no leaf carries a party label; spans are derived from the
-            markers, and only the turn holder could relay into one
-```
-
-The fingerprint distinguishes credentials, not people, and says so rather than
-letting a one-sided rehearsal pass as a negotiation.
-
-The new property is that **the witness does the cross-party redaction**. Each
-side's receipt carries the shared structure, both deliverables, and only its own
-transcript — the responder's is the mirror image, same root. The asker never
-receives the responder's calls, so there is nothing for the responder to trust
-the asker to have deleted, and the quote covers the code that redacted.
-
-Full spec and both user journeys: [ROUNDTRIP.md](ROUNDTRIP.md), which also covers
-the asymmetry a responder should notice before forwarding a credential to a
-witness their counterparty operates.
+Full spec and both journeys: [ROUNDTRIP.md](ROUNDTRIP.md).
 
 ## Verify it rather than trust it
 
