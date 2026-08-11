@@ -746,6 +746,12 @@ export default async function handler(
   PUBLIC_ORIGIN = new URL(cfg(ctx, "PUBLIC_BASE") || "https://pod.dstack.soc1024.com").origin;
   const publicBase = cfg(ctx, "PUBLIC_BASE")
     || (fwdHost && !fwdHost.startsWith("172.") ? `${fwdProto}://${fwdHost}/attest-proxy` : url.origin);
+  // Every URL this service mints — invite links, relay base_urls — is useless if
+  // it names the container's own address. Handing one out anyway fails far from
+  // the cause: the caller sees "connection refused" from their agent, minutes
+  // later, with nothing pointing at the missing setting. Refuse at the source.
+  const unreachable = /^https?:\/\/(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|localhost)/
+    .test(publicBase) && !cfg(ctx, "PUBLIC_BASE");
   const path = url.pathname;
 
   if (path === "/" || path === "/health") {
@@ -765,6 +771,11 @@ export default async function handler(
 
   // Mint an invite. Admin-only, and fails closed when no ADMIN_TOKEN is set.
   if (req.method === "POST" && path === "/invite") {
+    if (unreachable) {
+      return json({ error: "PUBLIC_BASE is not configured, so every URL this "
+        + `service would mint names its own container (${publicBase}) and is `
+        + "unreachable. Set PUBLIC_BASE in the deploy manifest." }, 503);
+    }
     const admin = cfg(ctx, "ADMIN_TOKEN");
     if (!admin) return json({ error: "no ADMIN_TOKEN configured" }, 503);
     const offered = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
@@ -832,6 +843,11 @@ export default async function handler(
   }
 
   if (req.method === "POST" && path === "/session") {
+    if (unreachable) {
+      return json({ error: "PUBLIC_BASE is not configured, so every URL this "
+        + `service would mint names its own container (${publicBase}) and is `
+        + "unreachable. Set PUBLIC_BASE in the deploy manifest." }, 503);
+    }
     // This endpoint is reachable from the internet and spends a real key, so it
     // fails closed: without a configured invite token nobody can open a session,
     // and a deployment that has a key but no token is a misconfiguration we
@@ -887,6 +903,11 @@ export default async function handler(
   // --- round trip -----------------------------------------------------------
 
   if (req.method === "POST" && path === "/thread") {
+    if (unreachable) {
+      return json({ error: "PUBLIC_BASE is not configured, so every URL this "
+        + `service would mint names its own container (${publicBase}) and is `
+        + "unreachable. Set PUBLIC_BASE in the deploy manifest." }, 503);
+    }
     await loadInvites(ctx?.dataDir);
     const shared = cfg(ctx, "SESSION_TOKEN");
     const offered = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();

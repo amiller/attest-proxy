@@ -26,11 +26,15 @@ fi
 # the placeholder explicit rather than pretending it is configured.
 KEY="${ANTHROPIC_API_KEY:-skip}"
 MAX_CALLS="${MAX_CALLS:-50}"
+# The handler sees the daemon's internal address, so every URL it mints — invite
+# links, relay base_urls — is unreachable without this. Omitting it does not
+# degrade gracefully: the caller gets http://172.x and a connection refused.
+PUBLIC_BASE="${PUBLIC_BASE:-$CVM/attest-proxy}"
 
 umask 077
 TGZ=$(mktemp --suffix=.tgz); MF=$(mktemp)
 tar czf "$TGZ" -C "$DIR" server.ts witness.ts project.json
-SESSION_TOKEN="$SESSION_TOKEN" KEY="$KEY" MAX_CALLS="$MAX_CALLS" python3 -c "
+SESSION_TOKEN="$SESSION_TOKEN" KEY="$KEY" MAX_CALLS="$MAX_CALLS" PUBLIC_BASE="$PUBLIC_BASE" python3 -c "
 import json, os
 print(json.dumps({'name':'attest-proxy','runtime':'deno',
   # 'public' controls whether the project shows in the daemon's unauthenticated
@@ -40,7 +44,8 @@ print(json.dumps({'name':'attest-proxy','runtime':'deno',
   'env':{
   'ANTHROPIC_API_KEY': os.environ['KEY'],
   'SESSION_TOKEN':     os.environ['SESSION_TOKEN'],
-  'MAX_CALLS':         os.environ['MAX_CALLS']}}))" > "$MF"
+  'MAX_CALLS':         os.environ['MAX_CALLS'],
+  'PUBLIC_BASE':       os.environ['PUBLIC_BASE']}}))" > "$MF"
 
 curl -sS -m 180 -X POST "$CVM/_api/projects" \
   -H "Authorization: Bearer $TEE_DAEMON_TOKEN" \
