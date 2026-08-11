@@ -320,8 +320,14 @@ def _usage_of(bundle):
     tin = tout = tcache = 0
     models = set()
     for c in bundle.get("calls", []):
-        if "response_b64" not in c or _is_marker(c):
-            continue      # withheld from this receipt, or a structural marker
+        if _is_marker(c):
+            continue
+        if "response_b64" not in c:
+            u = c.get("usage")
+            if u:         # withheld body, but the provider's figures travel with the leaf
+                tin += u.get("input", 0); tout += u.get("output", 0)
+                tcache += u.get("cached", 0); models.update(u.get("models") or [])
+            continue
         body = base64.b64decode(c["response_b64"]).split(b"\r\n\r\n", 1)[-1]
         text = body.decode("utf-8", "replace")
         events = []
@@ -491,10 +497,18 @@ def _report_thread(b, count):
         calls = [c for c in b["calls"] if s["lo"] <= _index(c) <= s["hi"]
                  and not _is_marker(c)]
         shown = [c for c in calls if "request_redacted" in c]
-        tin, tout, tcache, models = _usage_of({"calls": shown})
         tag = f"turn {s['seq']}" if s["seq"] else "open  "
-        usage = (f"{tin} in / {tout} out / {tcache} cached   {', '.join(models) or 'n/a'}"
-                 if shown else "[content withheld from this receipt]")
+        # Prefer the committed tally: it is the same for both parties, so the side
+        # that cannot read the transcript still gets the figures, and the side that
+        # can cannot restate them.
+        t = (_replay(b) or {}).get("sealed", {}).get("tally", {}).get(s["role"])
+        if t and s["seq"]:
+            tk, ms = t["tokens"], ", ".join(t.get("models") or []) or "n/a"
+            usage = f"{tk['input']} in / {tk['output']} out / {tk['cached']} cached   {ms}"
+        else:
+            tin, tout, tcache, models = _usage_of({"calls": shown})
+            usage = (f"{tin} in / {tout} out / {tcache} cached   "
+                     f"{', '.join(models) or 'n/a'}") if shown else "no relayed calls"
         print(f"  {tag}  {s['role']:<10} leaves {s['lo']}..{s['hi']:<4} "
               f"{len(calls)} calls   {usage}")
 
@@ -623,6 +637,8 @@ def cmd_check(a):
         print(f"not before  drand round {b['beacon']['round']}")
     print(f"usage    {tin} in / {tout} out / {tcache} cached tokens"
           f"   model(s): {', '.join(models) or 'n/a'}")
+    if not tin and not tout:
+        print("         [none relayed through this witness]")
     print("         [the provider's own figures, read out of responses this witness")
     print("          received over TLS against a pinned root]")
     if b.get("quote"):

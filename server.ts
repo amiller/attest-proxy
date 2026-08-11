@@ -24,6 +24,7 @@ try {
 type Call = {
   n: number;
   ts: string;
+  usage?: Usage;              // the provider's figures, kept out of the withheld body
   host: string;               // what the commitment binds; markers use THREAD_HOST
   request_redacted: string;   // latin-1 view of the bytes, $APIKEY left literal
   response_b64: string;
@@ -150,6 +151,7 @@ async function partyReceipt(sess: Session, role: string, root: Uint8Array,
     calls.push({
       index: i, commitment: c.commitment,
       inclusion_proof: (await inclusionProof(cs, i)).map(hex),
+      ...(c.usage ? { usage: c.usage } : {}),
       ...(mine ? { ts: c.ts, host: c.host, request_redacted: c.request_redacted,
                    response_b64: c.response_b64, seconds: c.seconds }
                : { withheld: "another party's call — content is not in this receipt" }),
@@ -207,10 +209,23 @@ async function close(sess: Session) {
     // credential fingerprint", with the root and the quote genuine throughout.
     const tally: Record<string, unknown> = {};
     for (const p of sess.parties) {
+      const mine = sess.calls.filter((c, i) => sess.owner[i] === p.role
+                                            && c.host !== THREAD_HOST);
+      const models: string[] = [];
+      for (const c of mine) for (const m of c.usage?.models ?? []) {
+        if (!models.includes(m)) models.push(m);
+      }
       tally[p.role] = {
-        calls: sess.owner.filter((o, i) => o === p.role
-                                        && sess.calls[i].host !== THREAD_HOST).length,
+        calls: mine.length,
         cred_fp: p.cred_fp,
+        // Committed, so the party who cannot see the transcript can still rely on
+        // them, and the party who can cannot restate them.
+        tokens: {
+          input: mine.reduce((a, c) => a + (c.usage?.input ?? 0), 0),
+          output: mine.reduce((a, c) => a + (c.usage?.output ?? 0), 0),
+          cached: mine.reduce((a, c) => a + (c.usage?.cached ?? 0), 0),
+        },
+        models,
       };
     }
     await marker(sess, "close", {
@@ -333,6 +348,41 @@ function callerCredential(req: Request): { header: string; value: string } | nul
 
 const PASS = ["content-type", "accept", "anthropic-version", "anthropic-beta"];
 
+type Usage = { input: number; output: number; cached: number; models: string[] };
+
+/** Token counts and model, read out of the provider's own response.
+ *
+ *  These have to be extracted here rather than left in the body, because the
+ *  counterparty's receipt withholds the body. Without this the party paying for
+ *  the work sees "12 calls" and no token figures at all, which is the one number
+ *  the billing claim rests on. Handles both a single JSON body and the SSE stream
+ *  agents actually use, where usage arrives split across message_start and
+ *  message_delta. */
+function usageOf(wire: Uint8Array): Usage {
+  const body = new TextDecoder().decode(wire).split("\r\n\r\n").slice(1).join("\r\n\r\n");
+  const events: Record<string, unknown>[] = [];
+  if (body.trimStart().startsWith("{")) {
+    try { events.push(JSON.parse(body)); } catch { /* not JSON; no figures to read */ }
+  } else {
+    for (const line of body.split("\n")) {
+      if (!line.startsWith("data: ")) continue;
+      try { events.push(JSON.parse(line.slice(6))); } catch { /* keep-alive or partial */ }
+    }
+  }
+  const u: Usage = { input: 0, output: 0, cached: 0, models: [] };
+  for (const e of events) {
+    const msg = (typeof e.message === "object" && e.message !== null ? e.message : e) as
+      Record<string, unknown>;
+    if (typeof msg.model === "string" && !u.models.includes(msg.model)) u.models.push(msg.model);
+    const g = (msg.usage ?? e.usage) as Record<string, number> | undefined;
+    if (!g) continue;
+    u.input += g.input_tokens ?? 0;
+    u.output += g.output_tokens ?? 0;
+    u.cached += (g.cache_creation_input_tokens ?? 0) + (g.cache_read_input_tokens ?? 0);
+  }
+  return u;
+}
+
 async function relay(sess: Session, role: string, path: string, req: Request,
                      cred: { header: string; value: string }) {
   const bodyBytes = new Uint8Array(await req.arrayBuffer());
@@ -375,6 +425,7 @@ async function relay(sess: Session, role: string, path: string, req: Request,
     response_b64: b64(wire),
     commitment: hex(c),
     seconds: (Date.now() - t0) / 1000,
+    usage: usageOf(wire),
   });
   sess.owner.push(role);
 
