@@ -220,6 +220,10 @@ def _thread(turns):
             mk(attest.THREAD_HOST, {"event": "join", "role": role, "label": role})
             mk(attest.THREAD_HOST, {"event": "serve", "to": role,
                                     "doc_sha256": doc["sha256"], "bytes": 3})
+        # The server emits a cred marker on a party's first RELAY, so a turn with no
+        # calls produces none and its committed fingerprint is null. Mirror that, or
+        # the synthetic thread disagrees with anything the witness would ever emit.
+        if ncalls and not any(t["role"] == role and t["calls"] for t in truth):
             mk(attest.THREAD_HOST, {"event": "cred", "role": role,
                                     "fingerprint": hashlib.sha256(role.encode()).hexdigest()[:32]})
         for _ in range(ncalls):
@@ -230,7 +234,16 @@ def _thread(turns):
                                 "text_sha256": hashlib.sha256(text.encode()).hexdigest()})
         truth.append({"role": role, "seq": seq, "lo": lo, "hi": len(leaves) - 1,
                       "calls": ncalls})
-    mk(attest.THREAD_HOST, {"event": "close", "turns": seq, "leaves": len(leaves) + 1})
+    # Mirrors what close() commits: per-role call counts, fingerprints and the
+    # provider's token figures, so the verifier's tally comparison is exercised.
+    tal = {}
+    for role in roles:
+        n = sum(t["calls"] for t in truth if t["role"] == role)
+        tal[role] = {"calls": n,
+                     "cred_fp": hashlib.sha256(role.encode()).hexdigest()[:32] if n else None,
+                     "tokens": {"input": 0, "output": 0, "cached": 0}, "models": []}
+    mk(attest.THREAD_HOST, {"event": "close", "turns": seq,
+                            "leaves": len(leaves) + 1, "tally": tal})
 
     cs = [attest.commitment(h, body, b"") for h, body in leaves]
     calls = [{"index": i, "host": h, "commitment": cs[i].hex(),

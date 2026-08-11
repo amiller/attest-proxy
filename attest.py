@@ -501,9 +501,10 @@ def _report_thread(b, count):
         # Prefer the committed tally: it is the same for both parties, so the side
         # that cannot read the transcript still gets the figures, and the side that
         # can cannot restate them.
-        t = (_replay(b) or {}).get("sealed", {}).get("tally", {}).get(s["role"])
-        if t and s["seq"]:
-            tk, ms = t["tokens"], ", ".join(t.get("models") or []) or "n/a"
+        committed = ((t.get("sealed") or {}).get("tally") or {}).get(s["role"])
+        if committed and s["seq"]:
+            tk = committed["tokens"]
+            ms = ", ".join(committed.get("models") or []) or "n/a"
             usage = f"{tk['input']} in / {tk['output']} out / {tk['cached']} cached   {ms}"
         else:
             tin, tout, tcache, models = _usage_of({"calls": shown})
