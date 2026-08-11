@@ -136,19 +136,13 @@ grants nothing but a turn in this thread.
 When they are done:
 
 ```bash
-./attest.py close attest-thread-9f2c8d1e.json
-./attest.py check attest-thread-9f2c8d1e.receipt.json
+./attest.py close attest-thread-eb0c576a.json
+./attest.py check attest-thread-eb0c576a.receipt.json
 ```
 
 ```
-  ok leaf   5 of 15  inclusion proof verified
-  ok leaf  10 of 15  inclusion proof verified   [content withheld]
-
-session root 4f1e…  recomputes
-11 of 15 leaves shown with content, 4 withheld but counted
-
 round trip  2 turns, 15 leaves, sealed
-  turn 1  asker      leaves 1..6    4 calls   1588 in / 692 out / 328614 cached   claude-opus-5
+  turn 1  asker      leaves 1..6    4 calls   1588 in / 735 out / 329234 cached   claude-opus-5
   turn 2  responder  leaves 7..13   3 calls   [content withheld from this receipt]
 parties     SAME credential fingerprint on both sides — this is one party talking to itself
 document    msa.md  sha256 d0b09a9001a87129…  matches the hash committed at leaf 0
@@ -156,8 +150,15 @@ document    msa.md  sha256 d0b09a9001a87129…  matches the hash committed at le
 attribution no leaf carries a party label; spans are derived from the
             markers, and only the turn holder could relay into one
 
+quote    present, binds report_data e5666e6bbad288d0…
+
 all recomputations green — turn structure established
 ```
+
+The responder's receipt is the mirror image: same `session_root`, same quote,
+turn 2 in full and turn 1 withheld. Checked on the live deployment — the two
+receipts share a root and a quote, their model-call content is disjoint, and
+neither party's prompt appears in the other's file.
 
 That fingerprint line is from a real run with both sides on one machine. With two
 subscriptions it reads `asker fp …  responder fp …  — distinct credentials`; the
@@ -171,7 +172,7 @@ their software and you are not sending them your transcript.
 Hand the URL to your agent:
 
 ```
-Read https://pod.dstack.soc1024.com/attest-proxy/t/9f2c…/join and follow it.
+Read https://pod.dstack.soc1024.com/attest-proxy/t/eb0c576a…/join and follow it.
 Tell me what this is and what it does and does not prove before doing any work.
 ```
 
@@ -181,14 +182,14 @@ is served the document. Then it works — **on your subscription, with your
 credential**; the witness holds no key and forwards yours upstream.
 
 ```bash
-./attest.py join "https://…/t/9f2c…/join#a41b…" \
+./attest.py join "https://pod.dstack.soc1024.com/attest-proxy/t/eb0c576a…/join#19db8da1…" \
   -- claude -p "answer their questions about the IP clause"
 ```
 
 Ending your turn commits your answer. You then hold a receipt of your own:
 
 ```bash
-./attest.py receipt attest-thread-9f2c8d1e.responder.json
+./attest.py receipt attest-thread-eb0c576a.responder.json
 ```
 
 It shows the same root, the same turn structure, the same document hash — and
@@ -201,6 +202,19 @@ and you can prove they asked before you answered. Neither of you had to agree in
 advance to trust the other's redaction, because neither of you performed it.
 
 ---
+
+## Verified live
+
+Run end to end against `pod.dstack.soc1024.com` in attested mode, commit
+`27fdd4c5b1d1`: both turns relayed, thread sealed, both receipts collected. The
+two receipts share a `session_root` and a quote, their model-call content is
+disjoint, and neither party's prompt appears in the other's file. The quote's
+`report_data` binds that root.
+
+`verify-quote` pins the platform measurements together with the repo and commit
+the daemon built from, and prints the `git clone … && git checkout …` line for
+that commit — a pin is worth only the audit behind it, and a bare tree hash
+corresponds to nothing you can read.
 
 ## Verify it rather than trust it
 

@@ -104,11 +104,11 @@ URL, and the other side's agent takes theirs on their own subscription.
 ```bash
 ./attest.py ask --purpose "Acme MSA — clause 7" --doc msa.md \
   -- claude -p "what should I put to them about the IP assignment?"
-# -> invite  https://…/t/9f2c…/join#a41b…      send this
+# -> invite  https://pod.dstack.soc1024.com/attest-proxy/t/eb0c576a…/join#19db8da1…      send this
 ```
 
 ```bash
-./attest.py join "https://…/t/9f2c…/join#a41b…" \
+./attest.py join "https://pod.dstack.soc1024.com/attest-proxy/t/eb0c576a…/join#19db8da1…" \
   -- claude -p "answer their questions"        # their machine, their credential
 ```
 
@@ -121,7 +121,7 @@ one machine, which is why the fingerprint line reads as it does:
 
 ```
 round trip  2 turns, 15 leaves, sealed
-  turn 1  asker      leaves 1..6    4 calls   1588 in / 692 out / 328614 cached   claude-opus-5
+  turn 1  asker      leaves 1..6    4 calls   1588 in / 735 out / 329234 cached   claude-opus-5
   turn 2  responder  leaves 7..13   3 calls   [content withheld from this receipt]
 parties     SAME credential fingerprint on both sides — this is one party talking to itself
 document    msa.md  sha256 d0b09a9001a87129…  matches the hash committed at leaf 0
