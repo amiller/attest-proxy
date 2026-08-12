@@ -1764,13 +1764,32 @@ export default async function handler(
       verdict = `relay failed: ${e}`;
     }
     const c = await commitment(provider.host, redacted, wire);
+    if (!publish) sess.subject.push({ at: "note", ref: "request withheld: it contains "
+      + "the document. Verify composition against the prompt_manifest leaf instead." });
     sess.calls.push({
       n: sess.calls.length + 1, ts: new Date().toISOString(), host: provider.host,
-      request_redacted: latin1(redacted), response_b64: b64(wire),
+      // The request contains the document. Publishing it while claiming the
+      // document is withheld would have handed over exactly what --private
+      // -document says it keeps back; the flag elided doc.text and left the
+      // document sitting in the prompt.
+      request_redacted: publish ? latin1(redacted) : "",
+      response_b64: b64(wire),
       commitment: hex(c), seconds: (Date.now() - t0) / 1000, usage: usageOf(wire),
     });
     sess.owner.push("solo");
     sess.cred = cred.value;
+    // Per-part hashes, committed. With the document published a reader can
+    // recompute the request bytes themselves. With it withheld they cannot — the
+    // commitment is over bytes that include it — so what they check instead is
+    // this decomposition: the instruction they hold hashes to the committed
+    // value, the document hash matches the one claimed, and the attested code
+    // says the request was these parts and nothing else.
+    const manifest = [];
+    for (const part of promptParts) {
+      manifest.push({ part: part.part, bytes: part.bytes,
+                      sha256: hex(await sha256(enc.encode(part.text))) });
+    }
+    await marker(sess, "prompt_manifest", { parts: manifest, published: publish });
     await marker(sess, "verdict", { provider: providerName, model, status, verdict,
                                     prompt_parts: promptParts });
     await close(sess, ctx?.dataDir);
