@@ -95,6 +95,22 @@ nothing about the other one.
 context. When this was checked on the authoring machine, a bundle contained the
 operator's own `CLAUDE.md`. `--none` is the form that is safe to hand out.
 
+## Record a directory, not a command
+
+Put the witness in a project's `.claude/settings.json` and every session started
+there is recorded, with no wrapper and nothing to remember. Sessions seal after
+30 minutes idle; each is bound to the git state it worked on and timestamped
+against a public beacon rather than your clock.
+
+```bash
+attest.py enable ~/work/acme --label sponsor-acme
+attest.py sessions ~/work/acme --collect ./receipts
+```
+
+Opt-in per directory, deliberately: on-by-default would route every repo on the
+machine through a third-party host, and that failure is silent. Full write-up,
+including what it establishes and what stays a floor: [DASHCAM.md](DASHCAM.md).
+
 ## Two parties, one matter
 
 The above proves *you* spent what you say you spent. A **round trip** answers a
