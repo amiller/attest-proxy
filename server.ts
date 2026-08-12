@@ -918,9 +918,9 @@ footer{margin-top:40px;padding-top:15px;border-top:1px solid var(--r);font-famil
 </style></head><body><div class="w">
 <header><p class="eb">edge-tee · invite · ${inv.label}</p>
 <h1>Send an agent into a witness</h1>
-<p class="stand">Your agent runs with no credential of its own. This service holds the key, commits to
-the exact bytes of every call, and signs a record you keep — so you can prove what you spent, and on
-what, without handing over the transcript.</p></header>
+<p class="stand">Ask a model about a document inside a sealed enclave that builds the request itself,
+and get back a receipt carrying the whole prompt — so whoever you send it to can read your question and
+confirm nothing else was in the context. You keep using your own credential; this service holds none.</p></header>
 
 <div class="banner"><p><b>${quoteAvailable ? "Attested mode" : "Dev mode — not attested"}.</b>
 ${quoteAvailable
@@ -1102,10 +1102,12 @@ font-family:var(--mono);font-size:12px;color:var(--muted)}
 </style></head><body><div class="w">
 <header>
 <p class="eb">edge-tee · attest-proxy</p>
-<h1>Witnessed agent sessions</h1>
-<p class="stand">Your agent runs with no credential. This service holds the key, relays every
-call, commits to the exact bytes, and signs a Merkle root over the session — so you can prove
-what you spent and on what, without showing the transcript.</p>
+<h1>An answer the other side can check</h1>
+<p class="stand">Ask a model a question about a document, inside a sealed enclave that builds
+the request itself. What comes back is the answer plus a receipt containing the entire
+prompt, so whoever you send it to can read your question, confirm nothing else was in the
+context, and see which model replied. You keep using your own credential; this service holds
+none.</p>
 </header>
 
 <h2>Status</h2>
@@ -1116,8 +1118,17 @@ what you spent and on what, without showing the transcript.</p>
 <tr><th>attestation</th><td>${badge(state.attested, "attested — quotes issued over each root", "dev — NO quote is issued; nothing here is proof")}<br/><a href="../_api/verification/attest-proxy">/_api/verification/attest-proxy</a></td></tr>
 </tbody></table>
 
-<h2>Use it</h2>
-<p>Open a session, run any agent against it, then close to get the signed bundle.</p>
+<h2>Ask a question you can hand over</h2>
+<p>The enclave composes the request from your instruction and your document and nothing
+else, so the whole input fits in the receipt and is short enough for a sceptic to read.</p>
+<pre>attest.py adjudicate --instruction question.md --doc case.md --model fable</pre>
+<p>Or paste the invite URL into Claude Code and describe what you want; it will work the
+rest out. Nothing to install if you have Claude Code already.</p>
+
+<h2>Or record a whole session</h2>
+<p>A different job: evidence of work done rather than an answer to cite. Open a session, run
+any agent against it, then close to get the signed bundle. Your agent keeps its own
+credential and this service forwards it.</p>
 <pre>curl -X POST $CVM/attest-proxy/session \\
   -H "Authorization: Bearer $INVITE" \\
   -d '{"purpose":"[research-router] my matter","profile":"holder-only"}'
