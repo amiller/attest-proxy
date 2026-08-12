@@ -1700,17 +1700,21 @@ export default async function handler(
     const promptParts = [
       ...(needsPreamble
         ? [{ part: "required preamble", bytes: CC_PREAMBLE.length, text: CC_PREAMBLE,
+             full: CC_PREAMBLE,
              why: "Anthropic serves this model on a subscription credential only "
                 + "with this exact first system block. Not chosen by the caller." }]
         : []),
-      { part: "framing", bytes: framing.length, text: framing,
+      { part: "framing", bytes: framing.length, text: framing, full: framing,
         why: "fixed by this service; says the document is material, not instructions" },
       { part: "instruction", bytes: instruction.length, text: instruction,
+        full: instruction,
         why: "the caller's question; read it to judge whether it was leading" },
       ...(docText
-        ? [{ part: "separator", bytes: sep.length, text: sep, why: "delimiter" },
+        ? [{ part: "separator", bytes: sep.length, text: sep, full: sep,
+             why: "delimiter" },
            { part: "document", bytes: docText.length,
-             text: publish ? docText : "", why: "the subject under assessment" }]
+             text: publish ? docText : "", full: docText,
+             why: "the subject under assessment" }]
         : []),
     ];
     const headers: Record<string, string> = {
@@ -1786,10 +1790,19 @@ export default async function handler(
     // says the request was these parts and nothing else.
     const manifest = [];
     for (const part of promptParts) {
+      // The REAL content, not the display text. Hashing the elided value gave
+      // the document entry the hash of the empty string, which told a reader
+      // nothing and looked like it told them something.
       manifest.push({ part: part.part, bytes: part.bytes,
-                      sha256: hex(await sha256(enc.encode(part.text))) });
+                      sha256: hex(await sha256(enc.encode(part.full))) });
     }
-    await marker(sess, "prompt_manifest", { parts: manifest, published: publish });
+    await marker(sess, "prompt_manifest", {
+      parts: manifest, published: publish,
+      ...(publish ? {} : { caveat:
+        "The document is withheld from this receipt, but the verdict is not, and a "
+        + "model commonly quotes the material it is assessing. Read the verdict "
+        + "before treating this as confidential." }),
+    });
     await marker(sess, "verdict", { provider: providerName, model, status, verdict,
                                     prompt_parts: promptParts });
     await close(sess, ctx?.dataDir);
