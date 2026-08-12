@@ -95,6 +95,25 @@ nothing about the other one.
 context. When this was checked on the authoring machine, a bundle contained the
 operator's own `CLAUDE.md`. `--none` is the form that is safe to hand out.
 
+## Get an opinion someone else can rely on
+
+People settle arguments by asking a frontier model, and the other side asks the
+obvious question: what else was in the context? An opinion from a model you could
+have primed is worth nothing.
+
+```bash
+attest.py adjudicate --instruction question.md --doc contract.md --model claude-opus-5
+```
+
+The witness composes the request itself — your instruction, your document, one
+fixed line of framing, no tools, no history — so the **whole input** lands in the
+receipt at about 2 KB, against 157 KB for a recorded agent turn. A reader can
+read your question and judge whether it was leading, confirm the model from the
+provider's own response, and confirm nothing else was in the context. The
+document can be withheld to its hash if it is confidential.
+
+Walkthrough: [ADJUDICATE.md](ADJUDICATE.md).
+
 ## Record a directory, not a command
 
 Put the witness in a project's `.claude/settings.json` and every session started
