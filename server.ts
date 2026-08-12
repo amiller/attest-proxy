@@ -239,7 +239,7 @@ async function recorderSession(rec: Recorder, ctx: { env?: Record<string, string
     meta: sessionMeta("holder-only", purpose),
     calls: [], opened: new Date().toISOString(),
     parties: [solo], owner: [], turn: 0, seq: 0, doc: null, subject: [],
-      check: null, checked: null, cred: null,
+      check: null, checked: null, cred: null, credHeader: "authorization", betas: "",
     expires: now + TTL_MS,
   };
   if (rec.subject) {
