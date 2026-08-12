@@ -629,6 +629,59 @@ def _report_thread(b, count):
     return "thread"
 
 
+def cmd_adjudicate(a):
+    """Put one instruction and one document to a model, in a closed context.
+
+    The witness composes the request, so the entire input is in the receipt and
+    is small enough to publish. That is the difference between "a model said
+    this" and "this, and only this, is what it was given" — the second is worth
+    something to a reader, the first is not.
+    """
+    invite = a.invite or os.environ.get("ATTEST_INVITE", "")
+    if not invite:
+        raise SystemExit("no invite token: set ATTEST_INVITE or pass --invite")
+    instruction = Path(a.instruction).read_text() if Path(a.instruction).exists() \
+        else a.instruction
+    doc = {"name": Path(a.doc).name, "text": Path(a.doc).read_text()} if a.doc else None
+    key = os.environ.get("ANTHROPIC_API_KEY") or _oauth_token()
+    if not key:
+        raise SystemExit("no model credential found: set ANTHROPIC_API_KEY, or log in "
+                         "with Claude Code so the OAuth token can be read")
+    req = urllib.request.Request(
+        f"{a.cvm}{APP}/adjudicate", method="POST",
+        data=json.dumps({"instruction": instruction, "document": doc, "model": a.model,
+                         "publish_document": not a.private_document}).encode(),
+        headers={"content-type": "application/json",
+                 "authorization": f"Bearer {invite}", "x-api-key": key})
+    with urllib.request.urlopen(req, timeout=300) as r:
+        b = json.loads(r.read())
+    out = Path(a.out or "adjudication.json")
+    out.write_text(json.dumps(b, indent=2))
+    print(f"model      {b['model']}")
+    if doc:
+        print(f"document   {doc['name']}  sha256 {b['doc']['sha256'][:16]}…  "
+              f"{b['doc']['bytes']} bytes"
+              + ("  [hash only, text withheld]" if a.private_document else ""))
+    print(f"\n{b['verdict']}\n")
+    print(f"receipt    {out}   session root {b['session_root'][:16]}…")
+    if b.get("quote_error"):
+        print(f"           no quote: {b['quote_error']}")
+
+
+def _oauth_token():
+    """Claude Code's own credential, so an adjudication costs the caller."""
+    p = Path.home() / ".claude" / ".credentials.json"
+    if not p.exists():
+        return None
+    d = json.loads(p.read_text())
+    for k in ("claudeAiOauth", "oauth"):
+        v = d.get(k) or {}
+        t = v.get("accessToken") or v.get("access_token")
+        if t:
+            return f"Bearer {t}"
+    return None
+
+
 def cmd_enable(a):
     """Turn a directory into a recorded one. Opt-in, deliberately.
 
@@ -1156,6 +1209,16 @@ def main():
 
     rc = sub.add_parser("receipt", help="fetch your party-scoped receipt")
     rc.add_argument("handle"); rc.add_argument("--out"); rc.set_defaults(fn=cmd_receipt)
+
+    ad = sub.add_parser("adjudicate", help="put one instruction and one document to "
+                        "a model in a closed, publishable context")
+    ad.add_argument("--instruction", required=True, help="text, or a path to it")
+    ad.add_argument("--doc", help="the document under assessment")
+    ad.add_argument("--model", default="claude-opus-5")
+    ad.add_argument("--private-document", action="store_true",
+                    help="commit the document's hash but keep its text out of the receipt")
+    ad.add_argument("--invite"); ad.add_argument("-o", "--out")
+    ad.set_defaults(fn=cmd_adjudicate)
 
     en = sub.add_parser("enable", help="record every session started in a directory")
     en.add_argument("dir", nargs="?", default=".")
