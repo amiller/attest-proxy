@@ -26,6 +26,9 @@ import os, sys, json, time, base64, hashlib, argparse, subprocess, urllib.reques
 from pathlib import Path
 
 DEFAULT_CVM = os.environ.get("ATTEST_CVM", "https://pod.dstack.soc1024.com")
+# Cheap tiers for mechanics, the good one for output worth showing someone.
+MODELS = {"haiku": "claude-haiku-4-5-20251001", "sonnet": "claude-sonnet-5",
+          "opus": "claude-opus-5", "fable": "claude-fable-5", "glm": "glm-4.6"}
 # Path the app is mounted at on the CVM. Set ATTEST_PREFIX="" to talk to a
 # server running standalone, e.g. `deno run server.ts` in local development.
 APP = os.environ.get("ATTEST_PREFIX", "/attest-proxy")
@@ -643,13 +646,20 @@ def cmd_adjudicate(a):
     instruction = Path(a.instruction).read_text() if Path(a.instruction).exists() \
         else a.instruction
     doc = {"name": Path(a.doc).name, "text": Path(a.doc).read_text()} if a.doc else None
-    key = os.environ.get("ANTHROPIC_API_KEY") or _oauth_token()
+    model = MODELS.get(a.model, a.model)
+    if a.provider == "zai":
+        key = os.environ.get("ZAI_API_KEY", "")
+        if not key:
+            raise SystemExit("no ZAI_API_KEY set")
+    else:
+        key = os.environ.get("ANTHROPIC_API_KEY") or _oauth_token()
     if not key:
         raise SystemExit("no model credential found: set ANTHROPIC_API_KEY, or log in "
                          "with Claude Code so the OAuth token can be read")
     req = urllib.request.Request(
         f"{a.cvm}{APP}/adjudicate", method="POST",
-        data=json.dumps({"instruction": instruction, "document": doc, "model": a.model,
+        data=json.dumps({"instruction": instruction, "document": doc, "model": model,
+                         "provider": a.provider,
                          "publish_document": not a.private_document}).encode(),
         headers={"content-type": "application/json",
                  "authorization": f"Bearer {invite}", "x-model-key": key})
@@ -657,7 +667,10 @@ def cmd_adjudicate(a):
         b = json.loads(r.read())
     out = Path(a.out or "adjudication.json")
     out.write_text(json.dumps(b, indent=2))
-    print(f"model      {b['model']}")
+    print(f"model      {b['model']}   via {b.get('provider','anthropic')}")
+    for part in b.get("prompt_parts") or []:
+        note = "  <- not chosen by you" if part["part"] == "required preamble" else ""
+        print(f"  {part['part']:<18} {part['bytes']:>6} bytes{note}")
     if doc:
         print(f"document   {doc['name']}  sha256 {b['doc']['sha256'][:16]}…  "
               f"{b['doc']['bytes']} bytes"
@@ -1247,7 +1260,9 @@ def main():
                         "a model in a closed, publishable context")
     ad.add_argument("--instruction", required=True, help="text, or a path to it")
     ad.add_argument("--doc", help="the document under assessment")
-    ad.add_argument("--model", default="claude-opus-5")
+    ad.add_argument("--model", default="sonnet",
+                    help="haiku|sonnet|opus|fable|glm, or a full model id")
+    ad.add_argument("--provider", default="anthropic", choices=["anthropic", "zai"])
     ad.add_argument("--private-document", action="store_true",
                     help="commit the document's hash but keep its text out of the receipt")
     ad.add_argument("--invite"); ad.add_argument("-o", "--out")
