@@ -213,6 +213,12 @@ at its path.
 
 The same commitment and Merkle constructions run on a Silicon Labs SiMG301 in
 `edge-tee/silabs-secure-vault/zktls`, signing a PSA token instead of a TDX quote.
-There the witness holds the key, so the agent has none and cannot go around it —
-which is what supports "this is everything I spent". One verifier checks bundles
-from either.
+There the witness holds the key, so the agent has none and cannot go around it,
+which is what supports "this is everything I spent".
+
+The **commitment construction** is shared and byte-identical, checked by a
+differential run against the firmware on real hardware. The **bundle format and
+the verifier are not**: `attest.py check` does not read a chip bundle today, and
+the chip has its own `verify_bundle.py` / `verify_session.py`. Treat these as two
+attesters sharing a core, not one product with two backends
+([#6](https://github.com/amiller/attest-proxy/issues/6)).
