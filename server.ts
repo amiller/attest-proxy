@@ -42,7 +42,9 @@ type Party = { role: string; token: string; label: string; cred_fp: string | nul
 type Session = {
   id: string;
   invite: string | null;
-  beacon: Beacon | null;
+  beacon: Beacon | null;      // the opening sample, kept for older readers
+  beacons: Beacon[];          // sampled through the session, so it spans an interval
+  sampled: number;            // ms of the last sample
   purpose: string;
   profile: string;
   instructed_by: string;
@@ -56,6 +58,9 @@ type Session = {
   turn: number;               // index of the party allowed to relay; -1 once closed
   seq: number;                // turns completed
   doc: { name: string; sha256: string; bytes: number; text: string } | null;
+  // What this session was working ON. Without it a receipt shows that a session
+  // happened and what it cost, and attributes that to nothing.
+  subject: { at: string; ref?: string; tree?: string; diff_sha256?: string }[];
   expires: number;
 };
 
@@ -217,11 +222,13 @@ async function partyReceipt(sess: Session, role: string, root: Uint8Array,
     merkle_root: cs.length ? hex(await merkleRoot(cs)) : null,
     session_root: hex(root),
     beacon: sess.beacon,
+    beacons: sess.beacons,
     report_data: hex(rd),
     quote, quote_error,
     parties: sess.parties.map((p) => ({ role: p.role, label: p.label, cred_fp: p.cred_fp })),
     doc: sess.doc && { name: sess.doc.name, sha256: sess.doc.sha256,
                        bytes: sess.doc.bytes, text: sess.doc.text },
+    subject: sess.subject,
     attribution: "No leaf carries a party label. Turn spans are derived from the "
                + "marker leaves, and only the turn holder could relay into one.",
     calls,
@@ -269,8 +276,9 @@ async function close(sess: Session, dataDir?: string) {
   }
   const cs = sess.calls.map((c) =>
     Uint8Array.from(c.commitment.match(/../g)!.map((h) => parseInt(h, 16))));
+  await sampleBeacon(sess);
   const root = await sessionRoot(sess.meta, cs);
-  const rd = await reportData(root, sess.beacon);
+  const rd = await reportData(root, sess.beacons);
   let quote: unknown = null, quote_error: string | null = null;
   try {
     quote = await quoteOver(rd);
@@ -346,13 +354,35 @@ async function fetchBeacon(): Promise<Beacon | null> {
   }
 }
 
-/** What the quote commits to. With a beacon the binding also fixes a lower
- *  bound on when the session ran; without one it is the bare root, and the
- *  bundle says which. */
-async function reportData(root: Uint8Array<ArrayBuffer>, beacon: Beacon | null): Promise<Uint8Array<ArrayBuffer>> {
-  if (!beacon) return root;
-  return await sha256(enc.encode("zktls-anchor-v1\0"), root,
-                      enc.encode(`${beacon.source}:${beacon.round}:${beacon.randomness}`));
+const tag = (b: Beacon) => `${b.source}:${b.round}:${b.randomness}`;
+
+/** What the quote commits to.
+ *
+ *  One sample fixes a lower bound: the session did not happen before that round.
+ *  That is a moment, not a duration, and "how long did this take" was the claim
+ *  people actually wanted. With samples taken through the session, the first and
+ *  last are bound instead, so the receipt spans an interval. v1 is still emitted
+ *  for a single sample so older receipts keep verifying. */
+async function reportData(root: Uint8Array<ArrayBuffer>, beacons: Beacon[]): Promise<Uint8Array<ArrayBuffer>> {
+  if (beacons.length === 0) return root;
+  if (beacons.length === 1) {
+    return await sha256(enc.encode("zktls-anchor-v1\0"), root, enc.encode(tag(beacons[0])));
+  }
+  return await sha256(enc.encode("zktls-anchor-v2\0"), root,
+                      enc.encode(tag(beacons[0])), new Uint8Array([0]),
+                      enc.encode(tag(beacons[beacons.length - 1])));
+}
+
+const SAMPLE_MS = 3 * 60 * 1000;
+
+/** Sample again if the last one is stale. Cheap, and it is what turns a moment
+ *  into a span. Unreachable drand stays non-fatal and simply is not recorded. */
+async function sampleBeacon(sess: Session) {
+  if (Date.now() - sess.sampled < SAMPLE_MS) return;
+  const b = await fetchBeacon();
+  if (!b) return;
+  sess.sampled = Date.now();
+  if (sess.beacons.at(-1)?.round !== b.round) sess.beacons.push(b);
 }
 
 /** Read config from the manifest env, falling back to process env. The shared
@@ -1024,17 +1054,24 @@ export default async function handler(
     const profile = String(b.profile ?? "holder-only");
     const id = hex(crypto.getRandomValues(new Uint8Array(16)));
     const beacon = await fetchBeacon();
+    const sub = (b.subject ?? null) as Record<string, string> | null;
     // A solo session is a one-party thread whose relay token is the session id,
     // so the relay and close paths are the same code as the round trip's.
     const solo: Party = { role: "solo", token: id, label: "solo", cred_fp: null, joined: true };
     const sess: Session = {
-      id, beacon, purpose, profile, invite: inv?.token ?? null,
+      id, beacon, beacons: beacon ? [beacon] : [], sampled: Date.now(),
+      purpose, profile, invite: inv?.token ?? null,
       instructed_by: String(b.instructed_by ?? ""),
       meta: sessionMeta(profile, purpose),
       calls: [], opened: new Date().toISOString(),
-      parties: [solo], owner: [], turn: 0, seq: 0, doc: null,
+      parties: [solo], owner: [], turn: 0, seq: 0, doc: null, subject: [],
       expires: Date.now() + TTL_MS,
     };
+    if (sub) {
+      sess.subject.push({ at: "open", ref: sub.ref, tree: sub.tree,
+                          diff_sha256: sub.diff_sha256 });
+      await marker(sess, "subject", { at: "open", ...sub });
+    }
     sessions.set(id, sess);
     byToken.set(id, { sess, idx: 0 });
     return json({ session_id: id, purpose, profile, beacon,
@@ -1048,6 +1085,13 @@ export default async function handler(
   if (req.method === "POST" && closing) {
     const sess = sessions.get(closing[1]);
     if (!sess) return json({ error: "unknown session" }, 404);
+    // The pair open/close is the evidence of what moved: a tree hash says where
+    // you were, a diff hash says what the session actually changed.
+    const cb = await req.json().catch(() => ({}));
+    if (cb?.subject) {
+      sess.subject.push({ at: "close", ...cb.subject });
+      await marker(sess, "subject", { at: "close", ...cb.subject });
+    }
     await close(sess, ctx?.dataDir);
     return json(receipts.get(sess.parties[0].token)!.body);
   }
@@ -1079,11 +1123,12 @@ export default async function handler(
     const parties = [newParty("asker", String(b.asker_label ?? "asker")),
                      newParty("responder", String(b.responder_label ?? "responder"))];
     const sess: Session = {
-      id, beacon: await fetchBeacon(), purpose, profile, invite: inv?.token ?? null,
+      id, beacon: null, beacons: [], sampled: Date.now(),
+      purpose, profile, invite: inv?.token ?? null,
       instructed_by: String(b.instructed_by ?? ""),
       meta: sessionMeta(profile, purpose),
       calls: [], opened: new Date().toISOString(),
-      parties, owner: [], turn: 0, seq: 0,
+      parties, owner: [], turn: 0, seq: 0, subject: [],
       // bytes must agree with what the hash covers. text.length counts UTF-16
       // code units, so a single em-dash in a contract makes the advertised size
       // disagree with the served bytes — spotted by a counterparty's agent
@@ -1093,6 +1138,8 @@ export default async function handler(
              bytes: enc.encode(text).length, text },
       expires: Date.now() + TTL_MS,
     };
+    const b0 = await fetchBeacon();
+    if (b0) { sess.beacon = b0; sess.beacons.push(b0); }
     sessions.set(id, sess);
     for (const [i, p] of parties.entries()) byToken.set(p.token, { sess, idx: i });
     await marker(sess, "open", {
@@ -1315,6 +1362,7 @@ export default async function handler(
         await saveInvites();
       }
     }
+    await sampleBeacon(sess);
     const p = sess.parties[at.idx];
     if (!p.cred_fp) {
       p.cred_fp = await credFingerprint(cred.value);

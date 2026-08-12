@@ -148,11 +148,19 @@ def session_root(meta: bytes, cs) -> bytes:
                           + len(cs).to_bytes(4, "big")).digest()
 
 
-def report_data(root: bytes, beacon) -> bytes:
-    if not beacon:
+def _btag(b):
+    return f"{b['source']}:{b['round']}:{b['randomness']}".encode()
+
+
+def report_data(root: bytes, beacon, beacons=None) -> bytes:
+    """v1 binds one sample (a lower bound); v2 binds first and last (a span)."""
+    bs = beacons if beacons else ([beacon] if beacon else [])
+    if not bs:
         return root
-    tag = f"{beacon['source']}:{beacon['round']}:{beacon['randomness']}".encode()
-    return hashlib.sha256(b"zktls-anchor-v1\0" + root + tag).digest()
+    if len(bs) == 1:
+        return hashlib.sha256(b"zktls-anchor-v1\0" + root + _btag(bs[0])).digest()
+    return hashlib.sha256(b"zktls-anchor-v2\0" + root + _btag(bs[0]) + b"\0"
+                          + _btag(bs[-1])).digest()
 
 
 # --- commands ---------------------------------------------------------------
@@ -162,6 +170,24 @@ def _cmd_after_dashdash(a):
     if not cmd:
         raise SystemExit("give a command after --, e.g. -- claude -p '...'")
     return cmd
+
+
+def git_subject():
+    """Where the working tree is, and what changed. None outside a repo.
+
+    HEAD is what a sponsor recognises; the diff is what carries the work. Record
+    both: a commit hash proves you were somewhere, a diff hash proves what moved.
+    """
+    def run(*a):
+        r = subprocess.run(a, capture_output=True, text=True)
+        return r.stdout.strip() if r.returncode == 0 else None
+    ref = run("git", "rev-parse", "HEAD")
+    if ref is None:
+        return None
+    diff = subprocess.run(["git", "diff", "HEAD"], capture_output=True)
+    return {"ref": ref,
+            "tree": run("git", "rev-parse", "HEAD^{tree}"),
+            "diff_sha256": hashlib.sha256(diff.stdout).hexdigest()}
 
 
 def _beacon_line(s, what):
@@ -177,8 +203,15 @@ def cmd_run(a):
         raise SystemExit("no invite token: set ATTEST_INVITE or pass --invite")
     cmd = _cmd_after_dashdash(a)
 
+    subject = git_subject()
+    if subject:
+        print(f"[attest] subject  HEAD {subject['ref'][:12]}  "
+              f"diff {subject['diff_sha256'][:12]}…")
+    else:
+        print("[attest] subject  none — not a git repo, so this receipt will attribute "
+              "the work to nothing")
     s = post(f"{a.cvm}{APP}/session", {
-        "purpose": a.purpose, "profile": a.profile,
+        "purpose": a.purpose, "profile": a.profile, "subject": subject,
         "instructed_by": a.instructed_by}, token=invite)
     sid = s["session_id"]
     _beacon_line(s, f"session {sid[:12]}…")
@@ -187,7 +220,8 @@ def cmd_run(a):
     try:
         rc, _ = run_agent(cmd, s["base_url"])
     finally:
-        bundle = post(f"{a.cvm}{APP}/session/{sid}/close")
+        bundle = post(f"{a.cvm}{APP}/session/{sid}/close",
+                      {"subject": git_subject()})
         out = Path(a.out or f"attest-{sid[:12]}.json")
         out.write_text(json.dumps(bundle, indent=2))
         n = sum(1 for c in bundle["calls"] if c.get("host") != THREAD_HOST)
@@ -657,7 +691,7 @@ def cmd_check(a):
               f"{count - content} withheld but counted"
               + (f" ({absent} absent entirely)" if absent else ""))
 
-    rd = report_data(bytes.fromhex(b["session_root"]), b.get("beacon"))
+    rd = report_data(bytes.fromhex(b["session_root"]), b.get("beacon"), b.get("beacons"))
     if b.get("report_data") and rd.hex() != b["report_data"]:
         raise SystemExit("report_data does not bind this root and beacon")
 
@@ -668,8 +702,17 @@ def cmd_check(a):
     print(f"release  {b['release']['profile']}"
           + (f" (instructed by {b['release']['instructed_by']})"
              if b["release"].get("instructed_by") else ""))
-    if b.get("beacon"):
-        print(f"not before  drand round {b['beacon']['round']}")
+    bs = b.get("beacons") or ([b["beacon"]] if b.get("beacon") else [])
+    if len(bs) > 1:
+        span = (bs[-1]["round"] - bs[0]["round"]) * 3
+        print(f"spanned     drand {bs[0]['round']}..{bs[-1]['round']}  "
+              f"(at least {span // 60}m{span % 60:02d}s)")
+    elif bs:
+        print(f"not before  drand round {bs[0]['round']}  [one sample: a moment, "
+              f"not a span]")
+    for sub in b.get("subject") or []:
+        print(f"subject     {sub['at']:<5} HEAD {(sub.get('ref') or '?')[:12]}  "
+              f"diff {(sub.get('diff_sha256') or '?')[:12]}…")
     print(f"usage    {tin} in / {tout} out / {tcache} cached tokens"
           f"   model(s): {', '.join(models) or 'n/a'}")
     if not tin and not tout:
@@ -679,7 +722,25 @@ def cmd_check(a):
               f"{b.get('call_count')} leaves are in this file]")
     print("         [the provider's own figures, read out of responses this witness")
     print("          received over TLS against a pinned root]")
-    if b.get("quote"):
+    attester = b.get("attester", "dstack-cvm")
+    if attester == "silabs-simg301":
+        # The chip binds the session root as the IAT nonce rather than as TDX
+        # report_data. Everything above this line is the same check for both
+        # attesters, because the constructions are the same; only what signs the
+        # root differs, so only this step dispatches.
+        iat = b.get("iat_hex")
+        if not iat:
+            print(f"attester {attester}: no SESS_CLOSE token — "
+                  f"{b.get('quote_error') or 'nothing here is attested'}")
+        else:
+            nonce = _iat_nonce(bytes.fromhex(iat))
+            if nonce != bytes.fromhex(b["session_root"]):
+                raise SystemExit(f"IAT nonce {nonce.hex()[:32]}… does not bind this "
+                                 f"session root {b['session_root'][:32]}…")
+            print(f"attester {attester}: IAT nonce binds this session root")
+            print("         COSE signature NOT checked here — verify it against the "
+                  "device key with silabs-secure-vault/zktls/host/verify_session.py")
+    elif b.get("quote"):
         # This line used to be printed without parsing anything, so a fabricated
         # session with a quote blob copied from an unrelated receipt read as bound.
         hexq = b["quote"].get("quote") if isinstance(b["quote"], dict) else None
@@ -701,6 +762,50 @@ def cmd_check(a):
         print("\nall recomputations green — turn structure established")
     else:
         print("\nall recomputations green")
+
+
+# --- PSA initial-attestation token, nonce claim ------------------------------
+#
+# Enough CBOR to reach claim -75008 inside a COSE_Sign1 payload, and no more.
+# This does NOT check the signature; verify_session.py on the chip side does that
+# against the device key, and this says so rather than implying otherwise.
+
+def _cbor(b, i=0):
+    """Return (value, next_index). Handles the subset a PSA IAT uses."""
+    ib = b[i]; mt, ai = ib >> 5, ib & 0x1f; i += 1
+    if ai < 24:      val = ai
+    elif ai == 24:   val = b[i]; i += 1
+    elif ai == 25:   val = int.from_bytes(b[i:i+2], "big"); i += 2
+    elif ai == 26:   val = int.from_bytes(b[i:i+4], "big"); i += 4
+    elif ai == 27:   val = int.from_bytes(b[i:i+8], "big"); i += 8
+    else:            raise SystemExit("unsupported CBOR additional info")
+    if mt == 0:  return val, i
+    if mt == 1:  return -1 - val, i
+    if mt in (2, 3):
+        raw = b[i:i+val]; i += val
+        return (raw if mt == 2 else raw.decode("utf-8", "replace")), i
+    if mt in (4, 5):
+        n = val * (2 if mt == 5 else 1)
+        out = []
+        for _ in range(n):
+            v, i = _cbor(b, i); out.append(v)
+        return (out if mt == 4 else dict(zip(out[::2], out[1::2]))), i
+    if mt == 6:
+        return _cbor(b, i)          # tag: value follows
+    if mt == 7:
+        return {20: False, 21: True, 22: None}.get(ai, val), i
+    raise SystemExit(f"unsupported CBOR major type {mt}")
+
+
+def _iat_nonce(token: bytes) -> bytes:
+    """The -75008 claim: what the chip signed, which is the session root."""
+    v, _ = _cbor(token)
+    if not isinstance(v, list) or len(v) < 3:
+        raise SystemExit("not a COSE_Sign1 structure")
+    claims, _ = _cbor(v[2])         # payload bstr -> claims map
+    if -75008 not in claims:
+        raise SystemExit(f"no nonce claim (-75008); saw {sorted(claims)}")
+    return claims[-75008]
 
 
 # --- TDX v4 quote, structural parse ------------------------------------------
@@ -736,7 +841,7 @@ def cmd_verify_quote(a):
         raise SystemExit("quote field is not hex; cannot parse")
     m = parse_quote(bytes.fromhex(hexq))
 
-    expect = report_data(bytes.fromhex(b["session_root"]), b.get("beacon"))
+    expect = report_data(bytes.fromhex(b["session_root"]), b.get("beacon"), b.get("beacons"))
     got = m["report_data"][:64]
     if got != expect.hex():
         raise SystemExit(f"quote commits to {got}, not this session's {expect.hex()}")
