@@ -652,7 +652,7 @@ def cmd_adjudicate(a):
         data=json.dumps({"instruction": instruction, "document": doc, "model": a.model,
                          "publish_document": not a.private_document}).encode(),
         headers={"content-type": "application/json",
-                 "authorization": f"Bearer {invite}", "x-api-key": key})
+                 "authorization": f"Bearer {invite}", "x-model-key": key})
     with urllib.request.urlopen(req, timeout=300) as r:
         b = json.loads(r.read())
     out = Path(a.out or "adjudication.json")

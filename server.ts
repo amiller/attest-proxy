@@ -1587,11 +1587,18 @@ export default async function handler(
     if (!inv && !(shared && offered === shared)) {
       return json({ error: "invite token required" }, 401);
     }
-    const cred = callerCredential(req);
-    if (!cred) {
+    // authorization carries the invite here, so the model credential needs its
+    // own header. A subscription token must go upstream as authorization: Bearer
+    // and an API key as x-api-key; sending one in the other's header is rejected,
+    // so the shape of the value decides.
+    const supplied = req.headers.get("x-model-key") ?? "";
+    if (!supplied) {
       return json({ error: "send your own model credential in x-model-key; this "
                          + "witness holds none" }, 401);
     }
+    const cred = /^Bearer\s/i.test(supplied)
+      ? { header: "authorization", value: supplied }
+      : { header: "x-api-key", value: supplied };
     const b = await req.json().catch(() => ({}));
     const instruction = String(b.instruction ?? "");
     if (!instruction) return json({ error: "instruction required" }, 400);
