@@ -14,6 +14,39 @@ find in your own words.
 
 ---
 
+## The common case: get an opinion someone else can rely on
+
+If someone wants a model's judgement they can cite, this is the command:
+
+```bash
+attest.py adjudicate --instruction question.md --doc subject.md --model claude-opus-5
+```
+
+The witness composes the request itself — the instruction, the document, one
+fixed line of framing, no tools and no history — so the **entire input** is in
+the receipt, about 2 KB against 157 KB for a recorded agent turn. That is the
+whole point: an opinion from a model that could have been primed is worth
+nothing, so the artifact has to carry the whole context and the context has to
+be small enough to read.
+
+What the reader of the receipt can establish without seeing the document:
+
+- the exact instruction, so they can judge whether the question was leading;
+- the model, from the provider's own response rather than the caller's claim;
+- that **nothing else was in the context**, because the whole request is there;
+- the verdict that came back, and a hardware quote over the root.
+
+`--private-document` commits the document's hash and withholds its text. The
+reader still knows a specific document was assessed under a question they can
+read, and a later disclosure has to hash to the same value.
+
+This does not establish that the verdict is right, or that the caller did not
+run twenty of these and publish one. Publishing the instruction makes shopping
+visible rather than impossible: a leading question reads as one.
+
+Recording a whole agent session (below) is a different job — evidence of work
+done — and is the wrong artifact for citing an opinion.
+
 ## First: which attester
 
 Two ways to participate. They share the commitment and Merkle constructions byte

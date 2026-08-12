@@ -1230,6 +1230,21 @@ export default async function handler(
     }
     return json({
       service: "edge-tee attested interposer",
+      start_here: {
+        what: "Getting a model's opinion that a third party can rely on.",
+        why: "An opinion from a model that could have been primed is worth nothing, "
+           + "so the artifact has to carry the whole context. This composes the "
+           + "request here — one instruction, one document, no tools, no history — "
+           + "so the entire input lands in the receipt at ~2 KB, against ~157 KB for "
+           + "a recorded agent turn, and a reader can check that nothing else was in "
+           + "the context.",
+        how: `POST ${base}/adjudicate  (Authorization: Bearer <invite>, `
+           + `x-model-key: <your model credential>)  body {"instruction":"...", `
+           + `"document":{"name":"...","text":"..."}, "model":"claude-opus-5"}`,
+        client: "attest.py adjudicate --instruction q.md --doc subject.md",
+        privacy: "publish_document:false commits the document's hash and keeps its "
+               + "text out of the receipt.",
+      },
       what_this_is:
         "A witness for agent API calls. It commits to the exact bytes of every call "
         + "and signs a Merkle root over the session, so you can prove what you spent "
