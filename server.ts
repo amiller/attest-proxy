@@ -75,6 +75,52 @@ const byToken = new Map<string, { sess: Session; idx: number }>();
  *  had done the work and not yet collected lost the evidence permanently on any
  *  redeploy or recycle — the one artifact the whole exchange exists to produce. */
 const receipts = new Map<string, { body: Record<string, unknown>; expires: number }>();
+
+/** A recorder is a long-lived token you can put in a config file.
+ *
+ *  Sessions are per-session by construction, so their relay URL cannot go in
+ *  `.claude/settings.json` — which meant recording required deciding in advance
+ *  that a session mattered, the one thing a dashcam must not require. A recorder
+ *  is a stable endpoint that opens a session on first call, rolls it over after
+ *  an idle gap, and keeps the sealed roots as an index.
+ *
+ *  Opt-in per directory on purpose. On-by-default would route every repo through
+ *  here, including work under contracts that forbid third-party hosts, and that
+ *  failure is silent and only discovered afterwards. */
+type Recorder = {
+  token: string;
+  label: string;
+  subject: Record<string, string> | null;
+  current: string | null;          // open session id, if any
+  last: number;                    // ms of last relay
+  sealed: { session_root: string; receipt_token: string; purpose: string;
+            rounds: [number, number] | null; opened: string; leaves: number }[];
+  created: string;
+};
+
+const recorders = new Map<string, Recorder>();
+let recorderStore: string | null = null;
+
+async function loadRecorders(dataDir: string | undefined) {
+  if (!dataDir || recorderStore) return;
+  const path = `${dataDir}/recorders.json`;
+  try {
+    const raw = await Deno.readTextFile(path);
+    for (const r of JSON.parse(raw) as Recorder[]) recorders.set(r.token, r);
+    recorderStore = path;
+  } catch (e) {
+    if (e instanceof Deno.errors.NotFound) recorderStore = path;
+  }
+}
+
+async function saveRecorders() {
+  if (!recorderStore) return;
+  try {
+    await Deno.writeTextFile(recorderStore, JSON.stringify([...recorders.values()]));
+  } catch { /* read-only data dir; recorders live only in memory then */ }
+}
+
+const IDLE_MS = 30 * 60 * 1000;
 let receiptStore: string | null = null;
 let receiptStoreState = "memory";
 
@@ -157,6 +203,58 @@ async function sweep(dataDir?: string) {
   const now = Date.now();
   for (const s of [...sessions.values()]) if (s.expires < now) await close(s, dataDir);
   for (const [k, r] of [...receipts]) if (r.expires < now) receipts.delete(k);
+}
+
+/** The session a recorder should relay into now, sealing and rolling the last
+ *  one if it has gone quiet. Rolling on idle is what makes the sealed unit a
+ *  work session rather than an arbitrary slice of wall clock. */
+async function recorderSession(rec: Recorder, ctx: { env?: Record<string, string>;
+                               dataDir?: string } | undefined): Promise<Session> {
+  const now = Date.now();
+  const open = rec.current ? sessions.get(rec.current) : null;
+  if (open && now - rec.last < IDLE_MS) { rec.last = now; return open; }
+  if (open) await sealRecorderSession(rec, open, ctx?.dataDir);
+
+  const id = hex(crypto.getRandomValues(new Uint8Array(16)));
+  const purpose = `[recorder ${rec.label}]`;
+  const beacon = await fetchBeacon();
+  const solo: Party = { role: "solo", token: id, label: rec.label,
+                        cred_fp: null, joined: true };
+  const sess: Session = {
+    id, beacon, beacons: beacon ? [beacon] : [], sampled: now,
+    purpose, profile: "holder-only", invite: null, instructed_by: "",
+    meta: sessionMeta("holder-only", purpose),
+    calls: [], opened: new Date().toISOString(),
+    parties: [solo], owner: [], turn: 0, seq: 0, doc: null, subject: [],
+    expires: now + TTL_MS,
+  };
+  if (rec.subject) {
+    sess.subject.push({ at: "open", ...rec.subject });
+    await marker(sess, "subject", { at: "open", ...rec.subject });
+  }
+  sessions.set(id, sess);
+  byToken.set(id, { sess, idx: 0 });
+  rec.current = id;
+  rec.last = now;
+  await saveRecorders();
+  return sess;
+}
+
+async function sealRecorderSession(rec: Recorder, sess: Session, dataDir?: string) {
+  const leaves = sess.calls.length;
+  const bs = sess.beacons;
+  await close(sess, dataDir);
+  const body = receipts.get(sess.parties[0].token)?.body as Record<string, string>;
+  rec.sealed.push({
+    session_root: String(body?.session_root ?? ""),
+    receipt_token: sess.parties[0].token,
+    purpose: sess.purpose,
+    rounds: bs.length ? [bs[0].round, bs[bs.length - 1].round] : null,
+    opened: sess.opened,
+    leaves,
+  });
+  rec.current = null;
+  await saveRecorders();
 }
 
 function newParty(role: string, label: string): Party {
@@ -1326,6 +1424,93 @@ export default async function handler(
       return json({ error: "thread is still open; the receipt exists only once it is closed" }, 409);
     }
     return json({ error: "unknown or expired party token" }, 404);
+  }
+
+  if (req.method === "POST" && path === "/recorder") {
+    if (unreachable) {
+      return json({ error: "PUBLIC_BASE is not configured, so the recorder URL would "
+        + `name this container (${publicBase}) and be unreachable.` }, 503);
+    }
+    await loadInvites(ctx?.dataDir);
+    await loadRecorders(ctx?.dataDir);
+    const shared = cfg(ctx, "SESSION_TOKEN");
+    const offered = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
+    if (!invites.get(offered) && !(shared && offered === shared)) {
+      return json({ error: "invite token required" }, 401);
+    }
+    const b = await req.json().catch(() => ({}));
+    const rec: Recorder = {
+      token: hex(crypto.getRandomValues(new Uint8Array(16))),
+      label: String(b.label ?? "recorder"),
+      subject: (b.subject ?? null) as Record<string, string> | null,
+      current: null, last: 0, sealed: [], created: new Date().toISOString(),
+    };
+    recorders.set(rec.token, rec);
+    await saveRecorders();
+    return json({
+      recorder: rec.token, label: rec.label,
+      base_url: `${publicBase}/r/${rec.token}`,
+      how: "set ANTHROPIC_BASE_URL to base_url in <project>/.claude/settings.json. "
+         + "Sessions open on first call and seal after "
+         + `${IDLE_MS / 60000} minutes idle.`,
+      index: `${publicBase}/r/${rec.token}`,
+    });
+  }
+
+  const recView = path.match(/^\/r\/([0-9a-f]{32})$/);
+  if (req.method === "GET" && recView) {
+    await loadRecorders(ctx?.dataDir);
+    const rec = recorders.get(recView[1]);
+    if (!rec) return json({ error: "unknown recorder" }, 404);
+    return json({
+      label: rec.label, created: rec.created, subject: rec.subject,
+      open_session: rec.current ? { leaves: sessions.get(rec.current)?.calls.length ?? 0 } : null,
+      sealed_count: rec.sealed.length,
+      sealed: rec.sealed,
+      collect: `${publicBase}/s/<receipt_token>/receipt`,
+      note: "This index is this service's own list. It is not attested: it shows at "
+          + "least these sessions, never that no others existed.",
+    });
+  }
+
+  const recSeal = path.match(/^\/r\/([0-9a-f]{32})\/seal$/);
+  if (req.method === "POST" && recSeal) {
+    await loadRecorders(ctx?.dataDir);
+    const rec = recorders.get(recSeal[1]);
+    if (!rec) return json({ error: "unknown recorder" }, 404);
+    const open = rec.current ? sessions.get(rec.current) : null;
+    if (!open) return json({ sealed: false, reason: "no open session" });
+    await sealRecorderSession(rec, open, ctx?.dataDir);
+    return json({ sealed: true, sessions: rec.sealed.length,
+                  latest: rec.sealed[rec.sealed.length - 1] });
+  }
+
+  const recRelay = path.match(/^\/r\/([0-9a-f]{32})(\/v1\/.*)$/);
+  if (req.method === "POST" && recRelay) {
+    await loadRecorders(ctx?.dataDir);
+    const rec = recorders.get(recRelay[1]);
+    if (!rec) {
+      return json({ type: "error", error: { type: "edge_tee_no_recorder",
+        message: "unknown recorder token" } }, 404);
+    }
+    const cred = callerCredential(req);
+    if (!cred) {
+      return json({ type: "error", error: { type: "edge_tee_no_credential",
+        message: "send your own model credential; this witness holds none" } }, 401);
+    }
+    const sess = await recorderSession(rec, ctx);
+    await sampleBeacon(sess);
+    const p = sess.parties[0];
+    if (!p.cred_fp) {
+      p.cred_fp = await credFingerprint(cred.value);
+      await marker(sess, "cred", { role: p.role, fingerprint: p.cred_fp });
+    }
+    try {
+      return await relay(sess, p.role, recRelay[2] + url.search, req, cred);
+    } catch (e) {
+      return json({ type: "error", error: { type: "edge_tee_relay_failed",
+        message: String(e) } }, 502);
+    }
   }
 
   const relayPath = path.match(/^\/s\/([0-9a-f]{32})(\/v1\/.*)$/);

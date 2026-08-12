@@ -615,6 +615,64 @@ def _report_thread(b, count):
     return "thread"
 
 
+def cmd_enable(a):
+    """Turn a directory into a recorded one. Opt-in, deliberately.
+
+    On-by-default would route every repo on the machine through the witness,
+    including work under contracts that forbid a third-party host, and that
+    failure is silent and only found afterwards. So: one directory at a time,
+    and the settings file it writes is visible in the repo.
+    """
+    invite = a.invite or os.environ.get("ATTEST_INVITE", "")
+    if not invite:
+        raise SystemExit("no invite token: set ATTEST_INVITE or pass --invite")
+    d = Path(a.dir).resolve()
+    if not d.is_dir():
+        raise SystemExit(f"{d} is not a directory")
+    cwd = os.getcwd()
+    os.chdir(d)
+    try:
+        subject = git_subject()
+    finally:
+        os.chdir(cwd)
+    r = post(f"{a.cvm}{APP}/recorder",
+             {"label": a.label or d.name, "subject": subject}, token=invite)
+
+    sf = d / ".claude" / "settings.json"
+    sf.parent.mkdir(exist_ok=True)
+    cfg = json.loads(sf.read_text()) if sf.exists() else {}
+    cfg.setdefault("env", {})["ANTHROPIC_BASE_URL"] = r["base_url"]
+    sf.write_text(json.dumps(cfg, indent=2) + "\n")
+
+    handle = d / ".claude" / "attest-recorder.json"
+    handle.write_text(json.dumps({"cvm": a.cvm, "recorder": r["recorder"],
+                                  "label": r["label"]}, indent=2) + "\n")
+    print(f"[attest] recording {d}")
+    print(f"[attest] wrote {sf}")
+    print(f"[attest] every Claude Code session started in this directory now routes")
+    print(f"         through the witness. Sessions seal after 30 minutes idle.")
+    if not subject:
+        print("[attest] note: not a git repo, so receipts here attribute work to nothing")
+    print(f"[attest] to stop: remove ANTHROPIC_BASE_URL from {sf}")
+
+
+def cmd_sessions(a):
+    h = json.loads((Path(a.dir) / ".claude" / "attest-recorder.json").read_text())
+    idx = get(f"{h['cvm']}{APP}/r/{h['recorder']}")
+    print(f"recorder {idx['label']}   {idx['sealed_count']} sealed"
+          + (f", 1 open ({idx['open_session']['leaves']} leaves)" if idx["open_session"] else ""))
+    for i, e in enumerate(idx["sealed"], 1):
+        rng = f"drand {e['rounds'][0]}..{e['rounds'][1]}" if e.get("rounds") else "no beacon"
+        print(f"  {i:>3}  {e['session_root'][:16]}…  {e['leaves']:>3} leaves  {rng}  {e['opened'][:16]}")
+    print(f"\n{idx['note']}")
+    if a.collect:
+        out = Path(a.collect); out.mkdir(exist_ok=True)
+        for i, e in enumerate(idx["sealed"], 1):
+            b = get(f"{h['cvm']}{APP}/s/{e['receipt_token']}/receipt")
+            (out / f"session-{i:03d}.json").write_text(json.dumps(b, indent=2))
+        print(f"collected {len(idx['sealed'])} receipts -> {out}/")
+
+
 # --- roll-up across sessions -------------------------------------------------
 #
 # The construction is the one already here, one level up: a Merkle tree whose
@@ -1072,6 +1130,16 @@ def main():
 
     rc = sub.add_parser("receipt", help="fetch your party-scoped receipt")
     rc.add_argument("handle"); rc.add_argument("--out"); rc.set_defaults(fn=cmd_receipt)
+
+    en = sub.add_parser("enable", help="record every session started in a directory")
+    en.add_argument("dir", nargs="?", default=".")
+    en.add_argument("--label"); en.add_argument("--invite")
+    en.set_defaults(fn=cmd_enable)
+
+    se = sub.add_parser("sessions", help="list what a recorded directory has accumulated")
+    se.add_argument("dir", nargs="?", default=".")
+    se.add_argument("--collect", metavar="DIR", help="also download every sealed receipt")
+    se.set_defaults(fn=cmd_sessions)
 
     ix = sub.add_parser("index", help="roll up many session receipts into one tree")
     ix.add_argument("action", choices=["add", "show"])
