@@ -289,6 +289,29 @@ def cmd_join(a):
     return rc
 
 
+def cmd_turn(a):
+    """Take a further turn in a thread you are already a party to.
+
+    A thread is not two turns; the turn passes back and forth until whoever
+    opened it closes. That is what makes an interactive challenge session
+    possible: challenge n+1 can only be written after answer n is committed, so
+    a demonstrator cannot have rehearsed it.
+    """
+    h = _handle(a)
+    # argparse.REMAINDER starts capturing at the first token after the positional,
+    # so `turn <handle> --text "..."` lands --text inside cmd and we try to exec it.
+    rest, text = list(a.cmd), a.text
+    if rest and rest[0] == "--text":
+        text, rest = rest[1], rest[2:]
+    cmd = rest[1:] if rest and rest[0] == "--" else rest
+    if cmd:
+        _, out = run_agent(cmd, f"{h['cvm']}{APP}/s/{h['token']}")
+        text = text or out
+    if not text:
+        raise SystemExit("pass --text, or a command after -- whose output becomes the turn")
+    _end_turn(h["cvm"], h["token"], text, h["role"])
+
+
 def cmd_close(a):
     h = _handle(a)
     if h["role"] != "asker":
@@ -493,25 +516,36 @@ def _report_thread(b, count):
         return "partial"
     turns = [s for s in t["spans"] if s["seq"]]
     print(f"round trip  {len(turns)} turns, {count} leaves, sealed")
+    seen_tokens = {}
     for s in t["spans"]:
         calls = [c for c in b["calls"] if s["lo"] <= _index(c) <= s["hi"]
                  and not _is_marker(c)]
         shown = [c for c in calls if "request_redacted" in c]
         tag = f"turn {s['seq']}" if s["seq"] else "open  "
-        # Prefer the committed tally: it is the same for both parties, so the side
-        # that cannot read the transcript still gets the figures, and the side that
-        # can cannot restate them.
-        committed = ((t.get("sealed") or {}).get("tally") or {}).get(s["role"])
-        if committed and s["seq"]:
-            tk = committed["tokens"]
-            ms = ", ".join(committed.get("models") or []) or "n/a"
-            usage = f"{tk['input']} in / {tk['output']} out / {tk['cached']} cached   {ms}"
-        else:
-            tin, tout, tcache, models = _usage_of({"calls": shown})
-            usage = (f"{tin} in / {tout} out / {tcache} cached   "
-                     f"{', '.join(models) or 'n/a'}") if shown else "no relayed calls"
+        # Per turn, from the figures carried on each leaf — which travel even when
+        # the body is withheld. The committed tally is per PARTY, so using it here
+        # printed one party's total against every one of its turns, and a four-turn
+        # session showed turns 2 and 4 with identical counts. It is cross-checked
+        # against these sums below instead.
+        tin, tout, tcache, models = _usage_of({"calls": calls})
+        usage = (f"{tin} in / {tout} out / {tcache} cached   {', '.join(models) or 'n/a'}"
+                 if calls else "no relayed calls")
+        seen_tokens.setdefault(s["role"], [0, 0, 0])
+        acc = seen_tokens[s["role"]]
+        acc[0] += tin; acc[1] += tout; acc[2] += tcache
         print(f"  {tag}  {s['role']:<10} leaves {s['lo']}..{s['hi']:<4} "
               f"{len(calls)} calls   {usage}")
+
+    # The per-turn sums must add up to what the witness committed for that party.
+    for role, acc in seen_tokens.items():
+        c = ((t.get("sealed") or {}).get("tally") or {}).get(role)
+        if not c:
+            continue
+        k = c["tokens"]
+        if [k["input"], k["output"], k["cached"]] != acc:
+            raise SystemExit(
+                f"{role}: turn figures sum to {acc} but the witness committed "
+                f"{[k['input'], k['output'], k['cached']]} — this receipt has been re-described")
 
     fps = t["fps"]
     missing = [r for r in t["roles"] if r not in fps]
@@ -843,6 +877,12 @@ def main():
     j.add_argument("--text", help="commit this instead of the agent's output")
     j.add_argument("--out")
     j.add_argument("cmd", nargs=argparse.REMAINDER); j.set_defaults(fn=cmd_join)
+
+    tn = sub.add_parser("turn", help="take a further turn in a thread you are in")
+    tn.add_argument("handle")
+    tn.add_argument("--text", help="commit this text as the turn")
+    tn.add_argument("cmd", nargs=argparse.REMAINDER)
+    tn.set_defaults(fn=cmd_turn)
 
     cl = sub.add_parser("close", help="seal the thread and collect your receipt")
     cl.add_argument("handle"); cl.add_argument("--out"); cl.set_defaults(fn=cmd_close)
