@@ -1672,8 +1672,19 @@ export default async function handler(
       "content-type": "application/json", "anthropic-version": "2023-06-01",
       [cred.header]: "$APIKEY",
     };
-    const betas = (req.headers.get("anthropic-beta") ?? "").split(",").map((x) => x.trim())
-      .filter((x) => x === "oauth-2025-04-20" || x === "claude-code-20250219").join(",");
+    // A subscription credential must carry oauth-2025-04-20. This endpoint gets
+    // the credential in a header of its own rather than from a relayed agent
+    // request, so there was no anthropic-beta to forward and none was sent —
+    // which upstream answered with 429 on Sonnet and Opus while Haiku passed,
+    // an entitlement failure wearing a rate-limit error's clothes.
+    const isOauth = /^Bearer\s/i.test(cred.value);
+    const betas = [
+      ...new Set([
+        ...(req.headers.get("anthropic-beta") ?? "").split(",").map((x) => x.trim())
+          .filter(Boolean),
+        ...(isOauth ? ["oauth-2025-04-20", "claude-code-20250219"] : []),
+      ]),
+    ].join(",");
     if (betas) headers["anthropic-beta"] = betas;
     const head = `POST /v1/messages HTTP/1.1\r\nhost: ${UPSTREAM}\r\n`
       + Object.entries(headers).map(([k, v]) => `${k}: ${v}`).join("\r\n")
