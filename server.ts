@@ -1796,6 +1796,11 @@ export default async function handler(
       manifest.push({ part: part.part, bytes: part.bytes,
                       sha256: hex(await sha256(enc.encode(part.full))) });
     }
+    // `full` exists only to hash the real content. Leaving it on the parts put
+    // the withheld document straight back into the receipt through a second
+    // field — the previous commit closed request_redacted and this one reopened
+    // it. Strip it before anything is committed or returned.
+    const disclosed = promptParts.map(({ full: _drop, ...rest }) => rest);
     await marker(sess, "prompt_manifest", {
       parts: manifest, published: publish,
       ...(publish ? {} : { caveat:
@@ -1804,11 +1809,11 @@ export default async function handler(
         + "before treating this as confidential." }),
     });
     await marker(sess, "verdict", { provider: providerName, model, status, verdict,
-                                    prompt_parts: promptParts });
+                                    prompt_parts: disclosed });
     await close(sess, ctx?.dataDir);
     const receipt = receipts.get(id)!.body as Record<string, unknown>;
     return json({ ...receipt, kind: "edge-tee adjudication", verdict, instruction,
-                  model, provider: providerName, prompt_parts: promptParts });
+                  model, provider: providerName, prompt_parts: disclosed });
   }
 
   if (req.method === "POST" && path === "/recorder") {
