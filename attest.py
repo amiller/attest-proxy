@@ -666,6 +666,13 @@ def cmd_adjudicate(a):
     print(f"receipt    {out}   session root {b['session_root'][:16]}…")
     if b.get("quote_error"):
         print(f"           no quote: {b['quote_error']}")
+    # A receipt whose verdict is an upstream error is honest evidence that the
+    # call was attempted, and is not an adjudication. Exiting 0 on it would let a
+    # script treat "rate limited" as an opinion.
+    if str(b.get("verdict", "")).startswith(("upstream ", "relay failed")):
+        print("\nNo verdict was produced. The receipt records the attempt, not an "
+              "opinion.")
+        return 1
 
 
 def _oauth_token():

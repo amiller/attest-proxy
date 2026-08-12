@@ -1684,8 +1684,16 @@ export default async function handler(
     const out = { ...headers, [cred.header]: cred.value } as Record<string, string>;
     let verdict = "", wire = new Uint8Array(0), status = 0;
     try {
-      const r = await fetch(`https://${UPSTREAM}/v1/messages`,
-                            { method: "POST", headers: out, body });
+      let r = await fetch(`https://${UPSTREAM}/v1/messages`,
+                          { method: "POST", headers: out, body });
+      // One retry on a transient limit. An adjudication is a single call the
+      // caller is paying for deliberately; losing it to a momentary 429 wastes
+      // their money and their time.
+      if (r.status === 429) {
+        await new Promise((k) => setTimeout(k, 5000));
+        r = await fetch(`https://${UPSTREAM}/v1/messages`,
+                        { method: "POST", headers: out, body });
+      }
       status = r.status;
       const raw = new Uint8Array(await r.arrayBuffer());
       wire = concat(enc.encode(`HTTP/1.1 ${r.status} ${r.statusText}\r\n\r\n`), raw);
