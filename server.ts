@@ -67,6 +67,8 @@ type Session = {
   check: { prompt: string; sha256: string } | null;
   checked: Record<string, unknown> | null;
   cred: string | null;              // last credential seen, to pay for the check
+  credHeader: string;               // which header carried it
+  betas: string;                    // the beta set the agent negotiated
   expires: number;
 };
 
@@ -384,15 +386,31 @@ async function runCheck(sess: Session) {
   try {
     const r = await fetch(`https://${UPSTREAM}/v1/messages`, {
       method: "POST",
-      headers: { "content-type": "application/json", "anthropic-version": "2023-06-01",
-                 authorization: sess.cred },
+      headers: {
+        "content-type": "application/json", "anthropic-version": "2023-06-01",
+        ...(sess.betas ? { "anthropic-beta": sess.betas } : {}),
+        [sess.credHeader]: sess.cred,
+      },
       body,
     });
-    const raw = new Uint8Array(await r.arrayBuffer());
+    let rr = r;
+    if (rr.status === 429) {
+      await new Promise((k) => setTimeout(k, 4000));
+      rr = await fetch(`https://${UPSTREAM}/v1/messages`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json", "anthropic-version": "2023-06-01",
+          ...(sess.betas ? { "anthropic-beta": sess.betas } : {}),
+          [sess.credHeader]: sess.cred,
+        },
+        body,
+      });
+    }
+    const raw = new Uint8Array(await rr.arrayBuffer());
     usage = usageOf(concat(enc.encode("x\r\n\r\n"), raw));
     const j = JSON.parse(new TextDecoder().decode(raw));
     verdict = (j?.content ?? []).map((b: { text?: string }) => b.text ?? "").join("").trim()
-      || `no verdict (upstream ${r.status})`;
+      || `no verdict (upstream ${rr.status})`;
   } catch (e) {
     error = String(e);
   }
@@ -657,7 +675,11 @@ async function relay(sess: Session, role: string, path: string, req: Request,
   const respHeaders = [...upstream.headers].map(([k, v]) => `${k}: ${v}`).join("\r\n");
   const wire = concat(enc.encode(statusLine + respHeaders + "\r\n\r\n"), respBody);
 
+  // A subscription credential is only accepted with the beta set the agent
+  // negotiated, so the checker has to present the same ones or it is refused.
   sess.cred = cred.value;
+  sess.credHeader = cred.header;
+  sess.betas = req.headers.get("anthropic-beta") ?? sess.betas;
   const c = await commitment(UPSTREAM, redacted, wire);
   sess.calls.push({
     n: sess.calls.length + 1,
@@ -1241,7 +1263,7 @@ export default async function handler(
       meta: sessionMeta(profile, purpose),
       calls: [], opened: new Date().toISOString(),
       parties: [solo], owner: [], turn: 0, seq: 0, doc: null, subject: [],
-      check: null, checked: null, cred: null,
+      check: null, checked: null, cred: null, credHeader: "authorization", betas: "",
       expires: Date.now() + TTL_MS,
     };
     if (sub) {
@@ -1311,7 +1333,7 @@ export default async function handler(
       meta: sessionMeta(profile, purpose),
       calls: [], opened: new Date().toISOString(),
       parties, owner: [], turn: 0, seq: 0, subject: [], check: null,
-      checked: null, cred: null,
+      checked: null, cred: null, credHeader: "authorization", betas: "",
       // bytes must agree with what the hash covers. text.length counts UTF-16
       // code units, so a single em-dash in a contract makes the advertised size
       // disagree with the served bytes — spotted by a counterparty's agent

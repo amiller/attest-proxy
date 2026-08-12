@@ -224,9 +224,22 @@ def cmd_run(a):
                       {"subject": git_subject()})
         out = Path(a.out or f"attest-{sid[:12]}.json")
         out.write_text(json.dumps(bundle, indent=2))
-        n = sum(1 for c in bundle["calls"] if c.get("host") != THREAD_HOST)
+        n = sum(1 for c in bundle["calls"] if c.get("host") not in (THREAD_HOST, CHECK_HOST))
         print(f"\n[attest] {n} model calls in {time.time()-t0:.1f}s "
               f"({bundle['call_count']} leaves incl. markers) -> {out}")
+        if n == 0:
+            # A directory that `enable` has recorded sets ANTHROPIC_BASE_URL in
+            # .claude/settings.json, and that wins over what this wrapper exports —
+            # so every call goes to the recorder and this session seals empty.
+            print("[attest] WARNING: this session witnessed no model calls.")
+            sf = Path(".claude/settings.json")
+            if sf.exists() and "ANTHROPIC_BASE_URL" in sf.read_text():
+                print("[attest] this directory is already recorded, and its "
+                      "settings.json overrides")
+                print("[attest] the wrapper. The calls went to the recorder instead: "
+                      "attest.py sessions .")
+            else:
+                print("[attest] the agent may have failed before making any call.")
         if bundle.get("quote_error"):
             print(f"[attest] no quote: {bundle['quote_error']}")
             print("[attest] the project is in dev mode; promote it for real attestation")
