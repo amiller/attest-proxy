@@ -373,7 +373,10 @@ async function reportData(root: Uint8Array<ArrayBuffer>, beacons: Beacon[]): Pro
                       enc.encode(tag(beacons[beacons.length - 1])));
 }
 
-const SAMPLE_MS = 3 * 60 * 1000;
+let SAMPLE_MS = 3 * 60 * 1000;
+try {
+  SAMPLE_MS = Number(Deno.env.get("BEACON_SAMPLE_MS")) || SAMPLE_MS;
+} catch { /* no env permission in the shared runtime; the default is correct there */ }
 
 /** Sample again if the last one is stale. Cheap, and it is what turns a moment
  *  into a span. Unreachable drand stays non-fatal and simply is not recorded. */

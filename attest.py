@@ -615,6 +615,84 @@ def _report_thread(b, count):
     return "thread"
 
 
+# --- roll-up across sessions -------------------------------------------------
+#
+# The construction is the one already here, one level up: a Merkle tree whose
+# leaves are session roots. That buys, across sessions, what a single receipt
+# already has within one — a count that cannot be understated once disclosed,
+# and inclusion proofs for any subset.
+#
+# What it deliberately does NOT buy: the index root is not attested by anything.
+# Each disclosed session still carries its own quote or IAT, so the sessions are
+# individually attested while the *set* is merely asserted by whoever kept the
+# index. Nothing stops omitting a session. That is the same floor as everywhere
+# else here and the output says so rather than leaving it to be inferred.
+
+def _index_load(path):
+    p = Path(path)
+    return json.loads(p.read_text()) if p.exists() else {"kind": "edge-tee session index",
+                                                         "sessions": []}
+
+
+def cmd_index(a):
+    idx = _index_load(a.file)
+    if a.action == "add":
+        for r in a.receipts:
+            b = json.loads(Path(r).read_text())
+            bs = b.get("beacons") or ([b["beacon"]] if b.get("beacon") else [])
+            idx["sessions"].append({
+                "session_root": b["session_root"],
+                "purpose": b.get("purpose", ""),
+                "attester": b.get("attester", "dstack-cvm"),
+                "subject": b.get("subject") or [],
+                "rounds": [bs[0]["round"], bs[-1]["round"]] if bs else None,
+                "file": str(Path(r).resolve()),
+            })
+        Path(a.file).write_text(json.dumps(idx, indent=2))
+        roots = [bytes.fromhex(x["session_root"]) for x in idx["sessions"]]
+        print(f"{len(idx['sessions'])} sessions -> {a.file}   "
+              f"index root {merkle_root(roots).hex()[:16]}…")
+        return
+    # show
+    roots = [bytes.fromhex(x["session_root"]) for x in idx["sessions"]]
+    keep = [int(x) for x in a.sessions.split(",")] if a.sessions else []
+    out = {"kind": "edge-tee session index disclosure",
+           "session_count": len(roots),
+           "index_root": merkle_root(roots).hex() if roots else None,
+           "index_root_is_not_attested":
+               "Each session below carries its own attestation. The index root does "
+               "not: nothing signs it, so this shows at least these sessions happened, "
+               "never that no others did.",
+           "sessions": []}
+    for i in keep:
+        e = dict(idx["sessions"][i - 1])
+        e["index"] = i - 1
+        e["inclusion_proof"] = [h.hex() for h in inclusion_proof(roots, i - 1)]
+        out["sessions"].append(e)
+    Path(a.out).write_text(json.dumps(out, indent=2))
+    print(f"disclosed {len(keep)} of {len(roots)} sessions -> {a.out}")
+
+
+def cmd_index_check(a):
+    d = json.loads(Path(a.bundle).read_text())
+    n = d["session_count"]
+    mr = bytes.fromhex(d["index_root"])
+    for e in d["sessions"]:
+        got = root_from(bytes.fromhex(e["session_root"]), e["index"], n,
+                        [bytes.fromhex(x) for x in e["inclusion_proof"]])
+        if got != mr:
+            raise SystemExit(f"session {e['index'] + 1} is not in this index")
+        rng = f"drand {e['rounds'][0]}..{e['rounds'][1]}" if e.get("rounds") else "no beacon"
+        print(f"  ok session {e['index'] + 1} of {n}  {e['session_root'][:16]}…  "
+              f"{rng}  {e['purpose'][:34]!r}")
+    print(f"\nindex root {d['index_root'][:32]}… recomputes")
+    print(f"{len(d['sessions'])} of {n} sessions shown, {n - len(d['sessions'])} withheld "
+          f"but counted")
+    print("\nThe index root is not attested by anything. Each session above is "
+          "individually\nattested; the claim that there were exactly "
+          f"{n} is this index-holder's word.")
+
+
 def cmd_check(a):
     b = json.loads(Path(a.bundle).read_text())
     meta = base64.b64decode(b["session_meta_b64"])
@@ -994,6 +1072,17 @@ def main():
 
     rc = sub.add_parser("receipt", help="fetch your party-scoped receipt")
     rc.add_argument("handle"); rc.add_argument("--out"); rc.set_defaults(fn=cmd_receipt)
+
+    ix = sub.add_parser("index", help="roll up many session receipts into one tree")
+    ix.add_argument("action", choices=["add", "show"])
+    ix.add_argument("receipts", nargs="*")
+    ix.add_argument("--file", default="attest-index.json")
+    ix.add_argument("--sessions", help="1-based, e.g. 2,5")
+    ix.add_argument("-o", "--out", default="index-disclosure.json")
+    ix.set_defaults(fn=cmd_index)
+
+    ic = sub.add_parser("index-check", help="verify an index disclosure")
+    ic.add_argument("bundle"); ic.set_defaults(fn=cmd_index_check)
 
     c = sub.add_parser("check"); c.add_argument("bundle"); c.set_defaults(fn=cmd_check)
 
