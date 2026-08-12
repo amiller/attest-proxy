@@ -1215,10 +1215,19 @@ export default async function handler(
   const inviteView = path.match(/^\/invite\/([0-9a-f]{32})(?:\.json)?$/);
   if (req.method === "GET" && inviteView) {
     await loadInvites(ctx?.dataDir);
-    const inv = invites.get(inviteView[1]);
+    // The deployment's shared SESSION_TOKEN is also 32 hex, so it matches this
+    // route, is not in the invite map, and 404s — which is what a visiting agent
+    // sees when handed a working token. Treat it as an uncapped invite.
+    const shared = cfg(ctx, "SESSION_TOKEN");
+    const inv = invites.get(inviteView[1])
+      ?? (shared && inviteView[1] === shared
+          ? { token: shared, label: "shared session token", max_calls: 0, used: 0,
+              created: "" } as Invite
+          : undefined);
     if (!inv) return json({ error: "unknown or revoked invite" }, 404);
     const quoteAvailable = await hasBroker();
-    const remaining = Math.max(0, inv.max_calls - inv.used);
+    const remaining = inv.max_calls === 0
+      ? Number.MAX_SAFE_INTEGER : Math.max(0, inv.max_calls - inv.used);
     const base = publicBase;
     // .json is the agent's path: WebFetch-style tools cannot set an Accept
     // header, so relying on content negotiation alone leaves them stranded.

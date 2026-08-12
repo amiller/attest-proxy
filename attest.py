@@ -1061,7 +1061,14 @@ def cmd_verify_quote(a):
     print("report_data binds this session: yes")
 
     pin = Path(a.pin) if a.pin else Path.home() / ".claude/attest-proxy-pin.json"
+    # Measured by the platform, read out of the quote.
     current = {k: m[k] for k in ("mrtd", "rtmr0", "rtmr1", "rtmr2", "rtmr3")}
+    # NOT measured: fetched over HTTPS from the deployment's own record. RTMR3
+    # covers the app id and compose hash, not the source tree, so these say what
+    # the deployment claims it built from. Pinning them still makes a change
+    # visible, which is worth having — but they are self-report, and printing
+    # them in the same list as the RTMRs implied a hardware measurement.
+    reported = {}
     # A bare tree hash is not provenance: it says the code has some identity, not
     # which code. The verification record names the repo and commit the daemon
     # built from, so a verifier can clone that commit and read what ran. Raised by
@@ -1073,19 +1080,25 @@ def cmd_verify_quote(a):
             src = (json.loads(r.read()).get("app") or {}).get("source") or {}
         for k in ("repo", "ref", "commit_sha", "tree_hash"):
             if src.get(k):
-                current[k] = src[k]
+                reported[k] = src[k]
     except Exception as e:
         print(f"could not read the deployment's source provenance: {e}")
-    if not current.get("commit_sha"):
+    if not reported.get("commit_sha"):
         print("NOTE: this deployment records no commit — nothing ties the code")
         print("      running here to any published source.")
 
+    both = {**current, **reported}
     if not pin.exists():
         pin.parent.mkdir(parents=True, exist_ok=True)
-        pin.write_text(json.dumps(current, indent=2))
-        print(f"FIRST RUN -- pinned these measurements to {pin}")
+        pin.write_text(json.dumps(both, indent=2))
+        print(f"FIRST RUN -- pinned to {pin}")
+        print("  measured by the platform, read from the quote:")
         for k, v in current.items():
-            print(f"  {k:10s} {v[:48]}")
+            print(f"    {k:10s} {v[:46]}")
+        if reported:
+            print("  reported by the deployment over HTTPS, NOT measured:")
+            for k, v in reported.items():
+                print(f"    {k:10s} {str(v)[:46]}")
         print()
         print("Nothing is verified yet. You have recorded what this deployment")
         print("measured today. Audit the source, then later runs are compared")
@@ -1098,23 +1111,36 @@ def cmd_verify_quote(a):
         return
 
     pinned = json.loads(pin.read_text())
-    drift = {k: (pinned.get(k), v) for k, v in current.items() if pinned.get(k) != v}
+    drift = {k: (pinned.get(k), v) for k, v in both.items() if pinned.get(k) != v}
     for k, v in current.items():
-        print(f"  {k:10s} {'CHANGED' if k in drift else 'ok':8s} {v[:32]}")
+        print(f"  {k:10s} {'CHANGED' if k in drift else 'ok':8s} {v[:32]}   [measured]")
+    for k, v in reported.items():
+        print(f"  {k:10s} {'CHANGED' if k in drift else 'ok':8s} {str(v)[:32]}   "
+              f"[self-reported, not measured]")
     if drift:
         print()
-        print("MEASUREMENTS CHANGED since you pinned them:")
+        print("CHANGED since you pinned:")
         for k, (was, now) in drift.items():
-            print(f"  {k}")
-            print(f"    was {was}")
-            print(f"    now {now}")
-        raise SystemExit("this is not the code or platform you audited -- stop")
+            print(f"  {k}\n    was {was}\n    now {now}")
+        print()
+        if [k for k in drift if k in current]:
+            print("The PLATFORM measurements changed. That is a different machine or a")
+            print("different image than the one you audited -- stop.")
+        else:
+            print("Only self-reported source fields changed: the deployment says it is")
+            print("running different code. The platform measurements are unchanged, and")
+            print("nothing in the quote attests the source, so this is the deployment's")
+            print("own account of itself. Re-audit the named commit before relying on it.")
+        raise SystemExit(1)
+
     print()
     print("matches your pin")
     print()
-    print("Establishes: the quote commits to this session, and the measurements")
-    print("match what you pinned. Does NOT establish: the signature chain is")
-    print("unverified here. For chain verification use a DCAP verifier.")
+    print("Establishes: the quote commits to this session, and the platform")
+    print("measurements match what you pinned.")
+    print("Does NOT establish: the DCAP signature chain, which is unverified here;")
+    print("and the repo/commit/tree fields, which the deployment reports about")
+    print("itself over HTTPS and no hardware measurement covers.")
 
 
 def cmd_show(a):
