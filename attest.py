@@ -212,7 +212,7 @@ def cmd_run(a):
               "the work to nothing")
     s = post(f"{a.cvm}{APP}/session", {
         "purpose": a.purpose, "profile": a.profile, "subject": subject,
-        "instructed_by": a.instructed_by}, token=invite)
+        "check": a.check, "instructed_by": a.instructed_by}, token=invite)
     sid = s["session_id"]
     _beacon_line(s, f"session {sid[:12]}…")
 
@@ -414,6 +414,7 @@ def _usage_of(bundle):
 
 
 THREAD_HOST = "edge-tee.thread"
+CHECK_HOST = "edge-tee.checker"
 
 
 def _index(c):
@@ -430,7 +431,7 @@ def _is_marker(c):
     Anything we cannot verify is therefore counted as a model call, which is the
     direction that cannot be used to understate someone else's work.
     """
-    return "request_redacted" in c and c.get("host") == THREAD_HOST
+    return "request_redacted" in c and c.get("host") in (THREAD_HOST, CHECK_HOST)
 
 
 def _events(b):
@@ -846,6 +847,16 @@ def cmd_check(a):
     elif bs:
         print(f"not before  drand round {bs[0]['round']}  [one sample: a moment, "
               f"not a span]")
+    ch = b.get("checked")
+    if ch:
+        print(f"checked     question {ch['prompt_sha256'][:16]}…  "
+              f"{ch['transcript_chars']} chars"
+              + ("  [TRUNCATED]" if ch.get("truncated") else ""))
+        for line in (ch.get("verdict") or ch.get("error") or "").splitlines()[:6]:
+            print(f"            {line[:74]}")
+        print("            [a model's opinion, answered in-enclave over the committed")
+        print("             transcript. That it ran on the real transcript is attested;")
+        print("             that the answer is right is not]")
     for sub in b.get("subject") or []:
         print(f"subject     {sub['at']:<5} HEAD {(sub.get('ref') or '?')[:12]}  "
               f"diff {(sub.get('diff_sha256') or '?')[:12]}…")
@@ -1095,6 +1106,8 @@ def main():
     r = sub.add_parser("run"); r.add_argument("--purpose", required=True)
     r.add_argument("--profile", default="holder-only",
                    choices=["holder-only", "aggregate-only", "dual-delivery"])
+    r.add_argument("--check", help="a question, fixed now, that the witness answers "
+                   "at close over the transcript it holds")
     r.add_argument("--instructed-by", default="")
     r.add_argument("--invite"); r.add_argument("--out")
     r.add_argument("cmd", nargs=argparse.REMAINDER)
