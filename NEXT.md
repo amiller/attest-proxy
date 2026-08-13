@@ -34,11 +34,14 @@ The published artifact matches.
    whose key is static and already present on that box.
    Pass condition is easy: `attest.py check` exits 0 and a verdict is present.
    No golden outputs to maintain.
-3. **[#7](https://github.com/amiller/attest-proxy/issues/7) DCAP verification.**
-   `verify-quote` never checks the quote's signature, so someone holding one
-   genuine quote could splice in a different `report_data` and get identical
-   output. Found by a cold reader. It is the last checkable-looking thing that
-   is not checked, and `automata-dcap-v3-attestation` is already in this tree.
+3. ~~#7 DCAP verification.~~ **Done in `8f24ba8`.** The quote's own signature is
+   verified (stdlib P-256, ~40 lines), which closes splicing because
+   `report_data` is inside the signed body; the attestation key is also checked
+   against the QE report so it cannot be swapped. P9 splices a real quote every
+   run and asserts rejection. **Remaining and stated in the output**: the PCK
+   chain to Intel's root and TCB status, so this shows the quote is unaltered,
+   not that it came from genuine Intel silicon. That needs X.509 parsing of the
+   PCK leaf — the natural follow-up, and a real dependency question.
 4. **Re-pin measurements.** `~/.claude/attest-proxy-pin.json` is several commits
    stale, so `verify-quote` currently reports source drift.
 5. **[#2](https://github.com/amiller/attest-proxy/issues/2)** is design-stage,
