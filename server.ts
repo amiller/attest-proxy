@@ -1257,7 +1257,7 @@ function claimPage(body: Record<string, unknown>, id: string, base: string, quot
   const cav = j.caveats.map((x) => `<li>${esc(x)}</li>`).join("");
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>An answer you can check</title><style>
+<title>Someone sent you this answer</title><style>
 :root{--g:#FAFAF9;--i:#14212B;--m:#5A6B77;--r:#DFE4E8;--a:#1B4D6B;--ok:#166534;--no:#9B1C1C;
 --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 body{background:var(--g);color:var(--i);margin:0;padding:0 22px 72px;
@@ -1281,10 +1281,11 @@ a{color:var(--a)}
 footer{margin-top:40px;padding-top:15px;border-top:1px solid var(--r);font-family:var(--mono);font-size:12px;color:var(--m)}
 </style></head><body><div class="w">
 <header><p class="eb">edge-tee · adjudication receipt</p>
-<h1>An answer you can check</h1>
-<p class="stand">A named model was asked one question about one document inside a sealed
-enclave that built the request itself. You don't have to trust me that I didn't rig it — you,
-or your agent, can verify every byte of what it was asked and what it answered.</p></header>
+<h1>Someone sent you this answer</h1>
+<p class="stand">They asked a model one question about one document, inside a sealed enclave
+that composed the request. You don't have to take their word for any of it. The question they
+asked is printed below in full, and you or your agent can confirm that nothing else was in
+the context.</p></header>
 
 <div class="banner"><p><b>${quoteAvailable ? "Attested." : "Dev mode — not attested."}</b>
 ${quoteAvailable
