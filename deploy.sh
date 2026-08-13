@@ -38,8 +38,11 @@ MAX_CALLS="${MAX_CALLS:-50}"
 
 umask 077
 MF=$(mktemp)
+# Claims must outlive the afternoon, so the receipt/thread TTL is a year unless
+# overridden. Raise or lower with THREAD_TTL_MS (milliseconds).
+THREAD_TTL_MS="${THREAD_TTL_MS:-31536000000}"
 REPO="$REPO" REF="$REF" SESSION_TOKEN="$SESSION_TOKEN" KEY="$KEY" \
-MAX_CALLS="$MAX_CALLS" PUBLIC_BASE="$PUBLIC_BASE" python3 -c "
+MAX_CALLS="$MAX_CALLS" PUBLIC_BASE="$PUBLIC_BASE" THREAD_TTL_MS="$THREAD_TTL_MS" python3 -c "
 import json, os
 print(json.dumps({'name':'attest-proxy','runtime':'deno',
   'source': os.environ['REPO'], 'ref': os.environ['REF'],
@@ -51,6 +54,7 @@ print(json.dumps({'name':'attest-proxy','runtime':'deno',
   'ANTHROPIC_API_KEY': os.environ['KEY'],
   'SESSION_TOKEN':     os.environ['SESSION_TOKEN'],
   'MAX_CALLS':         os.environ['MAX_CALLS'],
+  'THREAD_TTL_MS':     os.environ['THREAD_TTL_MS'],
   'PUBLIC_BASE':       os.environ['PUBLIC_BASE']}}))" > "$MF"
 
 curl -sS -m 300 -X POST "$CVM/_api/projects" \

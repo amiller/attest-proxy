@@ -228,7 +228,9 @@ async function credFingerprint(value: string): Promise<string> {
   return hex(await sha256(enc.encode("cred-fp-v1\0"), enc.encode(value))).slice(0, 32);
 }
 
-let TTL_MS = 2 * 60 * 60 * 1000;
+// A claim posted to a channel has to outlive the afternoon, so the default is
+// long; THREAD_TTL_MS overrides it. Two-party threads still seal at this bound.
+let TTL_MS = 365 * 24 * 60 * 60 * 1000;
 try {
   TTL_MS = Number(Deno.env.get("THREAD_TTL_MS")) || TTL_MS;
 } catch { /* no env permission in the shared runtime; the default is correct there */ }
