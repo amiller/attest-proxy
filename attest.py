@@ -648,9 +648,12 @@ def cmd_adjudicate(a):
     doc = {"name": Path(a.doc).name, "text": Path(a.doc).read_text()} if a.doc else None
     model = MODELS.get(a.model, a.model)
     if a.provider == "zai":
-        key = os.environ.get("ZAI_API_KEY", "")
+        # A machine already pointed at Z.AI keeps the key in Claude Code's own
+        # settings, so there is nothing to export. Env wins if both are present.
+        key = os.environ.get("ZAI_API_KEY", "") or _settings_token("api.z.ai")
         if not key:
-            raise SystemExit("no ZAI_API_KEY set")
+            raise SystemExit("no Z.AI key: set ZAI_API_KEY, or point Claude Code's "
+                             "settings.json at api.z.ai and it will be read from there")
     else:
         key = os.environ.get("ANTHROPIC_API_KEY") or _oauth_token()
     if not key:
@@ -686,6 +689,22 @@ def cmd_adjudicate(a):
         print("\nNo verdict was produced. The receipt records the attempt, not an "
               "opinion.")
         return 1
+
+
+def _settings_token(host):
+    """Claude Code's own credential, when it is already configured for `host`.
+
+    Reading it rather than requiring an export is what makes an unattended lane
+    need no setup: a box already talking to a provider through Claude Code has
+    everything needed to adjudicate through the same provider.
+    """
+    p = Path.home() / ".claude" / "settings.json"
+    if not p.exists():
+        return None
+    env = (json.loads(p.read_text()).get("env") or {})
+    if host not in str(env.get("ANTHROPIC_BASE_URL", "")):
+        return None
+    return env.get("ANTHROPIC_AUTH_TOKEN")
 
 
 def _oauth_token():

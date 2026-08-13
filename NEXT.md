@@ -20,14 +20,18 @@ The published artifact matches.
 
 ## Next, in order
 
-1. **Get a `ZAI_API_KEY` and exercise `--provider zai`.** It is implemented and
-   has never made a single call. This unblocks (2), and matters beyond cost: a
-   static API key does not expire, where an OAuth session token does.
-2. **Stand up the zed lane.** Verified reachable over `ssh -o BatchMode=yes zed`
+1. ~~Exercise `--provider zai`.~~ **Done.** Verified live from zed against
+   `glm-4.6`; receipt checks green. Note the Z.AI path produces a *cleaner*
+   context than Anthropic's: an API key needs no Claude Code preamble, so the
+   prompt is four parts the caller chose rather than five. The key is read
+   automatically from Claude Code's `settings.json` when that box is already
+   pointed at `api.z.ai`, so a lane needs no exported env.
+2. **Stand up the zed lane.** Now unblocked. Verified reachable over `ssh -o BatchMode=yes zed`
    (an older note saying agents cannot ssh zed is wrong). It has python3 and can
    reach the pod. `adjudicate` needs **no Claude Code install** — stdlib python
    plus a credential. The only blocker is that zed's OAuth token is expired and
-   cannot be refreshed headlessly. With a Z.AI key the lane runs unattended.
+   cannot be refreshed headlessly — so the lane should use `--provider zai`,
+   whose key is static and already present on that box.
    Pass condition is easy: `attest.py check` exits 0 and a verdict is present.
    No golden outputs to maintain.
 3. **[#7](https://github.com/amiller/attest-proxy/issues/7) DCAP verification.**
