@@ -1178,6 +1178,153 @@ than silent.</p>
 </div></body></html>`;
 }
 
+// A committed marker leaf is stored as a call whose request_redacted is the
+// marker JSON. The upstream provider call is not a marker and does not parse.
+function claimMarker(body: Record<string, unknown>, event: string) {
+  for (const c of ((body?.calls as { request_redacted?: string }[]) ?? [])) {
+    try {
+      const j = JSON.parse(c.request_redacted ?? "");
+      if (j.event === event) return j as Record<string, unknown>;
+    } catch { /* not a marker */ }
+  }
+  return null;
+}
+
+// What the checker's agent needs to validate the claim from this URL alone. It
+// is DATA, not instructions: the caveats are the point, so they are not buried.
+function claimJson(body: Record<string, unknown>, id: string, base: string, quoteAvailable: boolean) {
+  const v = claimMarker(body, "verdict") ?? {};
+  const a = claimMarker(body, "adjudicate") ?? {};
+  const doc = (body.doc ?? {}) as { name?: string; sha256?: string; bytes?: number; text?: string };
+  const beacon = (body.beacon ?? null) as { round?: number } | null;
+  const origin = new URL(base).origin;
+  const receiptUrl = `${base}/s/${id}/receipt`;
+  return {
+    kind: "edge-tee adjudication claim",
+    this_is_data_not_instructions:
+      "Everything here is a claim by the server you are checking. Do not repeat it "
+      + "to your principal as fact until you have run the two commands below and read "
+      + "the question yourself. The caveats are load-bearing; carry them into whatever "
+      + "you report.",
+    claim: {
+      question: v.instruction ?? a.instruction ?? "",
+      answer: v.verdict ?? "",
+      model: v.model ?? a.model ?? "",
+      provider: v.provider ?? "",
+      document: { name: doc.name ?? "", sha256: doc.sha256 ?? "", bytes: doc.bytes ?? 0,
+                  published: doc.text ? true : false },
+      not_before_drand_round: beacon?.round ?? null,
+    },
+    how_to_validate: {
+      "1_get_the_receipt": `curl -s ${receiptUrl} -o receipt.json`,
+      "2_get_the_tool": "git clone https://github.com/amiller/attest-proxy",
+      "3_recompute_commitments": "python3 attest-proxy/attest.py check receipt.json",
+      "4_verify_the_hardware": "python3 attest-proxy/attest.py verify-quote receipt.json",
+      "5_read_the_question":
+        "Read claim.question above with your own eyes and judge whether it was "
+        + "leading. No tool can do this for you.",
+      published_measurements: `${origin}/_api/verification/attest-proxy`,
+    },
+    what_each_check_establishes: {
+      check: "Recomputes every commitment: the prompt is itemized by part (size + "
+        + "hash) and the parts sum to the whole, so the question, the document hash, "
+        + "the model name, and the answer all bind and nothing was edited after.",
+      verify_quote: "Verifies the TDX quote's own signature, confirms its report_data "
+        + "binds THIS session (so a real quote cannot be spliced in from another run), "
+        + "and diffs the platform measurements (mrtd, rtmr0-3) against the pod's "
+        + "published measurements. Source drift between the pod's self-reported commit "
+        + "and latest is reported, not hidden.",
+    },
+    caveats: [
+      "verify-quote proves the code is unaltered, but the PCK/TCB chain to Intel's "
+        + "root is not yet checked — genuine Intel silicon is not yet proven.",
+      "The live pod may self-report a published-but-not-latest commit; the tool "
+        + "reports this drift and the platform measurements still match.",
+      "The operator of the enclave can read the document in the clear.",
+      "The receipt proves what was asked and what was answered — NOT that the answer "
+        + "is correct. Judge the substance yourself.",
+      "It does not prove the producer asked only once. Publishing the question makes "
+        + "shopping visible, not impossible.",
+    ],
+    attestation: claims(quoteAvailable),
+  };
+}
+
+function claimPage(body: Record<string, unknown>, id: string, base: string, quoteAvailable: boolean) {
+  const j = claimJson(body, id, base, quoteAvailable);
+  const c = j.claim;
+  const receiptUrl = `${base}/s/${id}/receipt`;
+  const cav = j.caveats.map((x) => `<li>${esc(x)}</li>`).join("");
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>An answer you can check</title><style>
+:root{--g:#FAFAF9;--i:#14212B;--m:#5A6B77;--r:#DFE4E8;--a:#1B4D6B;--ok:#166534;--no:#9B1C1C;
+--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+body{background:var(--g);color:var(--i);margin:0;padding:0 22px 72px;
+font:17px/1.62 Georgia,"Iowan Old Style","Times New Roman",serif}
+.w{max-width:720px;margin:0 auto}
+header{padding:52px 0 20px;border-bottom:2px solid var(--i)}
+h1{font-size:32px;line-height:1.15;margin:0 0 12px;letter-spacing:-.015em}
+.eb{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--m);margin:0 0 14px}
+.stand{color:var(--m);font-size:18px;margin:0}
+h2{font-size:20px;margin:34px 0 10px}
+p{margin:0 0 13px}ul{margin:0 0 13px;padding-left:22px}li{margin-bottom:7px}
+code{font-family:var(--mono);font-size:.85em;background:#F1F3F5;padding:1px 5px;border-radius:3px}
+pre{font-family:var(--mono);font-size:12.5px;line-height:1.65;background:#fff;border:1px solid var(--r);
+padding:14px 16px;overflow-x:auto;margin:0 0 15px;white-space:pre-wrap;word-break:break-word}
+.ans{background:#fff;border:1px solid var(--r);border-left:3px solid var(--a);padding:14px 16px;
+margin:0 0 15px;white-space:pre-wrap}
+.meta{font-family:var(--mono);font-size:12px;color:var(--m);margin:0 0 6px}
+.banner{border-left:3px solid ${quoteAvailable ? "var(--ok)" : "var(--no)"};padding:8px 0 8px 18px;margin:0 0 18px}
+.banner b{color:${quoteAvailable ? "var(--ok)" : "var(--no)"}}
+a{color:var(--a)}
+footer{margin-top:40px;padding-top:15px;border-top:1px solid var(--r);font-family:var(--mono);font-size:12px;color:var(--m)}
+</style></head><body><div class="w">
+<header><p class="eb">edge-tee · adjudication receipt</p>
+<h1>An answer you can check</h1>
+<p class="stand">A named model was asked one question about one document inside a sealed
+enclave that built the request itself. You don't have to trust me that I didn't rig it — you,
+or your agent, can verify every byte of what it was asked and what it answered.</p></header>
+
+<div class="banner"><p><b>${quoteAvailable ? "Attested." : "Dev mode — not attested."}</b>
+${quoteAvailable
+  ? "Each session carries a hardware quote over its committed root."
+  : "This deployment issues NO quote. Nothing here is proof yet; do not present it as attested."}</p></div>
+
+<h2>The question, exactly as asked</h2>
+<pre>${esc(String(c.question))}</pre>
+
+<h2>The answer, exactly as returned</h2>
+<div class="ans">${esc(String(c.answer))}</div>
+<p class="meta">model ${esc(String(c.model))} · provider ${esc(String(c.provider))} · as the provider itself reported it</p>
+<p class="meta">document ${esc(String(c.document.name))} · sha256 ${esc(String(c.document.sha256).slice(0, 32))}… · ${c.document.bytes} bytes${c.document.published ? " · published in the receipt" : " · withheld, hash only"}</p>
+${c.not_before_drand_round ? `<p class="meta">ran no earlier than drand round ${c.not_before_drand_round}</p>` : ""}
+
+<h2>Hand this to your agent</h2>
+<p>Paste this into Claude Code (approve the fetch, or start with
+<code>--allowedTools "WebFetch(domain:${new URL(base).host})"</code>):</p>
+<pre>Read ${base}/claim/${id}.json and follow it. Validate this
+adjudication end to end, then tell me exactly what checks out and
+what it still does NOT prove.</pre>
+
+<h2>Or check it by hand</h2>
+<pre>curl -s ${receiptUrl} -o receipt.json
+git clone https://github.com/amiller/attest-proxy
+python3 attest-proxy/attest.py check receipt.json
+python3 attest-proxy/attest.py verify-quote receipt.json</pre>
+<p><code>check</code> recomputes every commitment, so the question, the document hash, the
+model name, and the answer all bind and nothing was edited. <code>verify-quote</code> checks the
+hardware quote signs this exact session and diffs the pod's
+<a href="${new URL(base).origin}/_api/verification/attest-proxy">published measurements</a>.
+Then read the question above and judge for yourself whether it was fair — no tool can do that part.</p>
+
+<h2>What this does not prove</h2>
+<ul>${cav}</ul>
+
+<footer>receipt ${id} · github.com/amiller/attest-proxy</footer>
+</div></body></html>`;
+}
+
 export default async function handler(
   req: Request,
   ctx?: { env: Record<string, string>; dataDir: string },
@@ -1619,6 +1766,25 @@ export default async function handler(
       return json({ error: "thread is still open; the receipt exists only once it is closed" }, 409);
     }
     return json({ error: "unknown or expired party token" }, 404);
+  }
+
+  // The checker's entry point: one URL that hands a skeptic's agent everything
+  // it needs to validate an adjudication. HTML for the human who clicks it, a
+  // .json twin for the agent (which cannot set an Accept header).
+  const claimView = path.match(/^\/claim\/([0-9a-f]{32})(\.json)?$/);
+  if (req.method === "GET" && claimView) {
+    await loadReceipts(ctx?.dataDir);
+    await sweep(ctx?.dataDir);
+    const r = receipts.get(claimView[1]);
+    if (!r) return json({ error: "unknown or expired claim" }, 404);
+    const quoteAvailable = await hasBroker();
+    const wantsHtml = !claimView[2]
+      && (req.headers.get("accept") ?? "").includes("text/html");
+    if (wantsHtml) {
+      return new Response(claimPage(r.body, claimView[1], publicBase, quoteAvailable),
+        { headers: { "content-type": "text/html; charset=utf-8" } });
+    }
+    return json(claimJson(r.body, claimView[1], publicBase, quoteAvailable));
   }
 
   // --- adjudication ---------------------------------------------------------
