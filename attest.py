@@ -678,7 +678,12 @@ def cmd_adjudicate(a):
         print(f"document   {doc['name']}  sha256 {b['doc']['sha256'][:16]}…  "
               f"{b['doc']['bytes']} bytes"
               + ("  [hash only, text withheld]" if a.private_document else ""))
-    print(f"\n{b['verdict']}\n")
+    if b.get("declined"):
+        print(f"\n  THE MODEL DECLINED TO ANSWER   (stop_reason: {b.get('stop_reason')})")
+        print("  This is a result, not a failure: the question and the whole context are")
+        print("  in the receipt, so a reader can see nothing in the prompt provoked it.\n")
+    else:
+        print(f"\n{b['verdict']}\n")
     print(f"receipt    {out}   session root {b['session_root'][:16]}…")
     if b.get("claim_url"):
         print(f"claim      {b['claim_url']}   <- paste this; its .json twin tells a checker's agent how to validate it")

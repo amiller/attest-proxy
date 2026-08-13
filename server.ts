@@ -1921,6 +1921,7 @@ export default async function handler(
     const t0 = Date.now();
     const out = { ...headers, [cred.header]: cred.value } as Record<string, string>;
     let verdict = "", wire = new Uint8Array(0), status = 0;
+    let stop = "", declined = false;
     try {
       let r = await fetch(`https://${provider.host}${provider.path}`,
                           { method: "POST", headers: out, body });
@@ -1939,6 +1940,18 @@ export default async function handler(
       if (r.ok) {
         const j = JSON.parse(text);
         verdict = (j?.content ?? []).map((x: { text?: string }) => x.text ?? "").join("").trim();
+        stop = String(j?.stop_reason ?? "");
+        // A refusal arrives as HTTP 200 with stop_reason "refusal" and NO content
+        // blocks at all, so joining the text yielded "" and the receipt rendered
+        // a blank verdict — throwing away the result. A model declining this
+        // exact question, in a context the reader can see in full, is itself the
+        // finding: it is attested that nothing in the prompt provoked it.
+        if (!verdict && stop === "refusal") {
+          verdict = "[the model declined to answer]";
+          declined = true;
+        } else if (!verdict) {
+          verdict = `[empty response, stop_reason ${stop || "unknown"}]`;
+        }
       } else {
         verdict = `upstream ${r.status}: ${text.slice(0, 300)}`;
       }
@@ -1987,7 +2000,7 @@ export default async function handler(
         + "before treating this as confidential." }),
     });
     await marker(sess, "verdict", { provider: providerName, model, status, verdict,
-                                    prompt_parts: disclosed });
+                                    stop_reason: stop, declined, prompt_parts: disclosed });
     await close(sess, ctx?.dataDir);
     const receipt = receipts.get(id)!.body as Record<string, unknown>;
     // The receipt strips party tokens, so the producer would have no way to form
