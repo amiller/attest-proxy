@@ -301,6 +301,35 @@ def roundtrip():
     return accepted, rejected
 
 
+def quote_signature():
+    """P9: a spliced quote must fail. This is the attack a cold reader described:
+    take a genuine quote, swap the 64 report_data bytes for the root of a
+    fabricated session, leave the measurements alone. Structural parsing accepted
+    it; the body signature does not."""
+    import hashlib
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from p256 import verify
+    samples = sorted(Path("/tmp").glob("adj*.json")) + sorted(Path("/tmp").glob("ck*.json"))
+    for f in samples:
+        try:
+            b = json.loads(f.read_text())
+            hexq = (b.get("quote") or {}).get("quote")
+            if not hexq:
+                continue
+        except Exception:
+            continue
+        raw = bytes.fromhex(hexq)
+        sec = raw[636:636 + int.from_bytes(raw[632:636], "little")]
+        pub, sig = sec[64:128], sec[0:64]
+        assert verify(pub, sig, hashlib.sha256(raw[:632]).digest()), f"genuine quote failed: {f}"
+        t = bytearray(raw)
+        t[568:600] = b"\x41" * 32                    # splice report_data
+        assert not verify(pub, sig, hashlib.sha256(bytes(t[:632])).digest()), \
+            f"SPLICED quote accepted: {f}"
+        return f.name
+    return None
+
+
 if __name__ == "__main__":
     checked, sizes = exhaustive()
     print(f"P1 round-trip     decided over {checked} (tree, leaf) pairs")
@@ -315,6 +344,12 @@ if __name__ == "__main__":
     print(f"                  match what was built; generative, not exhaustive")
     print(f"P8 span integrity {rej} mutations rejected — every single-leaf deletion and")
     print(f"                  every out-of-turn marker loses the structural reading")
+    q = quote_signature()
+    if q:
+        print(f"\nP9 quote signature  genuine quote verifies; splicing report_data is")
+        print(f"                    rejected  (sample {q})")
+    else:
+        print("\nP9 quote signature  SKIPPED — no quote-bearing receipt to hand")
     if "--diff" in sys.argv:
         n = differential()
         print(f"\nP6 differential   {n} random cases, Python and TypeScript agree byte for byte")

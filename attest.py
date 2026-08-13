@@ -1060,6 +1060,42 @@ def _iat_nonce(token: bytes) -> bytes:
     return claims[-75008]
 
 
+# --- TDX v4 quote: signature verification ------------------------------------
+#
+# Structural parsing alone let a spliced quote pass: take one genuine quote,
+# replace the 64 report_data bytes with the root of a fabricated session, leave
+# the measurements untouched, and every check printed what it prints for a real
+# one. Found by a cold reader who read the source rather than the output.
+#
+# Verifying the quote's own signature closes that, because report_data sits
+# inside the signed body. What is checked here:
+#
+#   1. the attestation key signed (header || TD report)      -> body is intact
+#   2. that attestation key is bound into the QE report      -> key not swapped
+#
+# What is still NOT checked, and is stated in the output rather than implied:
+# the PCK certificate chain up to Intel's root, and TCB status. So this
+# establishes the quote is internally consistent and unaltered, not that it came
+# from genuine Intel silicon.
+
+def verify_quote_signature(raw: bytes) -> dict:
+    from p256 import verify
+    body = raw[:632]                       # header (48) || TD report (584)
+    sig_len = int.from_bytes(raw[632:636], "little")
+    sec = raw[636:636 + sig_len]
+    quote_sig, attest_pub = sec[0:64], sec[64:128]
+    out = {"body_signature": verify(attest_pub, quote_sig, hashlib.sha256(body).digest())}
+    # cert data: type (2) + size (4), then the QE report block when type == 6
+    if int.from_bytes(sec[128:130], "little") == 6:
+        inner = sec[134:]
+        qe_report = inner[0:384]
+        alen = int.from_bytes(inner[448:450], "little")
+        auth = inner[450:450 + alen]
+        out["attest_key_bound"] = (hashlib.sha256(attest_pub + auth).digest()
+                                   == qe_report[320:352])
+    return out
+
+
 # --- TDX v4 quote, structural parse ------------------------------------------
 #
 # Offsets from the Intel TDX DCAP v4 spec, matching tools/dcap/dcap_parse.py in
@@ -1091,7 +1127,19 @@ def cmd_verify_quote(a):
     hexq = q.get("quote") if isinstance(q, dict) else None
     if not isinstance(hexq, str):
         raise SystemExit("quote field is not hex; cannot parse")
-    m = parse_quote(bytes.fromhex(hexq))
+    raw = bytes.fromhex(hexq)
+    m = parse_quote(raw)
+
+    sigs = verify_quote_signature(raw)
+    if not sigs.get("body_signature"):
+        raise SystemExit("the quote's own signature does not verify: its body has been "
+                         "altered, or it was not produced by the key it carries")
+    print("quote signature verifies: yes  (report_data is inside the signed body,")
+    print("                               so it cannot be swapped for another session)")
+    if sigs.get("attest_key_bound") is False:
+        raise SystemExit("the signing key is not the one the quoting enclave vouched for")
+    if sigs.get("attest_key_bound"):
+        print("signing key vouched for by the quoting enclave: yes")
 
     expect = report_data(bytes.fromhex(b["session_root"]), b.get("beacon"), b.get("beacons"))
     got = m["report_data"][:64]
@@ -1177,7 +1225,9 @@ def cmd_verify_quote(a):
     print()
     print("Establishes: the quote commits to this session, and the platform")
     print("measurements match what you pinned.")
-    print("Does NOT establish: the DCAP signature chain, which is unverified here;")
+    print("Does NOT establish: that this came from genuine Intel silicon. The quote")
+    print("is internally consistent and unaltered, but the PCK certificate chain up to")
+    print("Intel's root and the TCB status are still unchecked;")
     print("and the repo/commit/tree fields, which the deployment reports about")
     print("itself over HTTPS and no hardware measurement covers.")
 
