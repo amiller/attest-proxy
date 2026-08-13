@@ -680,6 +680,8 @@ def cmd_adjudicate(a):
               + ("  [hash only, text withheld]" if a.private_document else ""))
     print(f"\n{b['verdict']}\n")
     print(f"receipt    {out}   session root {b['session_root'][:16]}…")
+    if b.get("claim_url"):
+        print(f"claim      {b['claim_url']}   <- paste this; its .json twin tells a checker's agent how to validate it")
     if b.get("quote_error"):
         print(f"           no quote: {b['quote_error']}")
     # A receipt whose verdict is an upstream error is honest evidence that the

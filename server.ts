@@ -1989,8 +1989,11 @@ export default async function handler(
                                     prompt_parts: disclosed });
     await close(sess, ctx?.dataDir);
     const receipt = receipts.get(id)!.body as Record<string, unknown>;
+    // The receipt strips party tokens, so the producer would have no way to form
+    // the checker URL from it. Hand back the claim URL (and its id) explicitly.
     return json({ ...receipt, kind: "edge-tee adjudication", verdict, instruction,
-                  model, provider: providerName, prompt_parts: disclosed });
+                  model, provider: providerName, prompt_parts: disclosed,
+                  id, claim_url: `${publicBase}/claim/${id}` });
   }
 
   if (req.method === "POST" && path === "/recorder") {
