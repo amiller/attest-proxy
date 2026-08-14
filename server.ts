@@ -1366,17 +1366,19 @@ padding:12px 14px;overflow-x:auto;margin:8px 0;white-space:pre-wrap;word-break:b
 .notg li{padding:7px 0 7px 20px;position:relative}
 .notg li:before{content:"—";position:absolute;left:2px;color:var(--faint)}
 a{color:var(--ac)}
+.hlink{color:var(--mut);text-decoration:none}
+.hlink:hover{color:var(--ac)}
 footer{margin-top:40px;padding-top:14px;border-top:1px solid var(--line);font-family:var(--mono);font-size:11.5px;color:var(--faint)}
 </style></head><body><div class="r">
 
 <div class="head">
-<div class="hid"><span class="hlabel">attest-proxy claim</span><b>${id}</b></div>
+<div class="hid"><a class="hlabel hlink" href="${base}/">attest-proxy claim ↗</a><b>${id}</b></div>
 <div style="text-align:right"><span class="hlabel">instance</span><span class="state">${host} · ${quoteAvailable ? "sealed" : "DEV — not attested"}</span></div>
 </div>
 
 <div class="lbl">The exchange</div>
 ${xq}
-<p class="pnote">This was the entire prompt — no prior turns, no hidden setup.</p>
+<p class="pnote">This was the entire prompt — no prior turns, no hidden setup, and <b>no tools, no web, no retrieval</b>. Each answer is the model's own, from training; nothing was looked up.</p>
 
 <div class="yj">Your call: read the ${many ? "questions and answers" : "question and answer"} above and judge <b>whether the ${many ? "questions were" : "question was"} fair and the ${many ? "answers hold" : "answer holds"} up</b>. That part is yours. Everything below is settled by the record so you don't have to check it.</div>
 
@@ -1407,13 +1409,13 @@ python3 attest-proxy/attest.py verify-quote receipt.json</pre></details>
 
 <div class="lbl">Not settled here</div>
 <ul class="notg">
-<li>Whether the ${many ? "answers are" : "answer is"} correct — yours to judge, against the question you can read above.</li>
+<li>Whether the ${many ? "answers are" : "answer is"} correct — yours to judge, against the question you can read above. ${many ? "They are the model's" : "It is the model's"} own recall, with no tools and nothing checked against sources.</li>
 <li>That the producer asked only once. Publishing the question makes shopping visible, not impossible.</li>
 <li>That the running image is the published source — that still needs a reproducible build (dstack-mr).</li>
 <li>The operator of the enclave can read the transcript in the clear.</li>
 </ul>
 
-<footer>attest-proxy · ${host} · github.com/amiller/attest-proxy</footer>
+<footer><a href="${base}/">this attest-proxy instance</a> · <a href="https://github.com/amiller/attest-proxy">what attest-proxy is (github)</a></footer>
 </div></body></html>`;
 }
 
