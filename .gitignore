@@ -1,3 +1,6 @@
 *.tgz
 __pycache__/
 attest-*.json
+
+# local working notes, never publish
+adjudications/
