@@ -643,8 +643,11 @@ def cmd_adjudicate(a):
     invite = a.invite or os.environ.get("ATTEST_INVITE", "")
     if not invite:
         raise SystemExit("no invite token: set ATTEST_INVITE or pass --invite")
-    instruction = Path(a.instruction).read_text() if Path(a.instruction).exists() \
-        else a.instruction
+    texts = [Path(x).read_text() if Path(x).exists() else x for x in a.instruction]
+    multi = len(texts) > 1
+    if multi and a.doc:
+        raise SystemExit("--doc is single-question only; drop it or ask one instruction")
+    instruction = texts[0]
     doc = {"name": Path(a.doc).name, "text": Path(a.doc).read_text()} if a.doc else None
     model = MODELS.get(a.model, a.model)
     if a.provider == "zai":
@@ -659,17 +662,40 @@ def cmd_adjudicate(a):
     if not key:
         raise SystemExit("no model credential found: set ANTHROPIC_API_KEY, or log in "
                          "with Claude Code so the OAuth token can be read")
+    payload = {"model": model, "provider": a.provider,
+               "publish_document": not a.private_document}
+    if multi:
+        payload["questions"] = texts
+    else:
+        payload["instruction"] = instruction
+        payload["document"] = doc
     req = urllib.request.Request(
         f"{a.cvm}{APP}/adjudicate", method="POST",
-        data=json.dumps({"instruction": instruction, "document": doc, "model": model,
-                         "provider": a.provider,
-                         "publish_document": not a.private_document}).encode(),
+        data=json.dumps(payload).encode(),
         headers={"content-type": "application/json",
                  "authorization": f"Bearer {invite}", "x-model-key": key})
     with urllib.request.urlopen(req, timeout=300) as r:
         b = json.loads(r.read())
     out = Path(a.out or "adjudication.json")
     out.write_text(json.dumps(b, indent=2))
+    if b.get("questions"):
+        qs = b["questions"]
+        print(f"model      {b['model']}   via {b.get('provider','anthropic')}   "
+              f"{len(qs)} questions in one receipt, one quote")
+        for q in qs:
+            print(f"\n── Q{q['n']}: {q['instruction'].strip()[:72]}")
+            if q.get("declined"):
+                print("   [the model declined to answer]")
+            else:
+                print(f"   {q['verdict'].strip()[:500]}")
+        print(f"\nreceipt    {out}   session root {b['session_root'][:16]}…")
+        if b.get("claim_url"):
+            print(f"claim      {b['claim_url']}   <- one link, every answer, one quote")
+        if any(str(q.get("verdict", "")).startswith(("upstream ", "relay failed"))
+               for q in qs):
+            print("\nAt least one call was an upstream error, not an opinion.")
+            return 1
+        return
     print(f"model      {b['model']}   via {b.get('provider','anthropic')}")
     for part in b.get("prompt_parts") or []:
         note = "  <- not chosen by you" if part["part"] == "required preamble" else ""
@@ -1334,8 +1360,10 @@ def main():
 
     ad = sub.add_parser("adjudicate", help="put one instruction and one document to "
                         "a model in a closed, publishable context")
-    ad.add_argument("--instruction", required=True, help="text, or a path to it")
-    ad.add_argument("--doc", help="the document under assessment")
+    ad.add_argument("--instruction", required=True, action="append",
+                    help="text, or a path to it; repeat to put several questions "
+                         "in one receipt under one quote")
+    ad.add_argument("--doc", help="the document under assessment (single-question only)")
     ad.add_argument("--model", default="sonnet",
                     help="haiku|sonnet|opus|fable|glm, or a full model id")
     ad.add_argument("--provider", default="anthropic", choices=["anthropic", "zai"])
