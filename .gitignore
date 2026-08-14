@@ -4,3 +4,8 @@ attest-*.json
 
 # local working notes, never publish
 adjudications/
+
+# internal, not published
+NEXT.md
+PRD-checkable-answer.md
+__pycache__/

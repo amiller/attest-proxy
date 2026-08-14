@@ -349,7 +349,7 @@ async function partyReceipt(sess: Session, role: string, root: Uint8Array,
          + "python3 attest-proxy/attest.py check <this-file>",
       also: "attest.py verify-quote <this-file> — binds the TDX quote to this "
           + "session and diffs platform measurements against your own pin",
-      explains: "https://raw.githubusercontent.com/amiller/attest-proxy/main/skill-roundtrip.md",
+      explains: "https://raw.githubusercontent.com/amiller/attest-proxy/main/docs/skill-roundtrip.md",
       without_running_it: "you have NOT verified anything; the fields below are "
                         + "only self-consistent until the commitments are recomputed",
     },
@@ -1026,7 +1026,7 @@ does and does not prove before doing any work.</pre>
 so three things that matter are repeated here rather than left to the manifest:</p>
 <ul>
 <li><b>Read the protocol first.</b>
-<a href="https://raw.githubusercontent.com/amiller/attest-proxy/main/skill-roundtrip.md">skill-roundtrip.md</a>
+<a href="https://raw.githubusercontent.com/amiller/attest-proxy/main/docs/skill-roundtrip.md">skill-roundtrip.md</a>
 covers verifying the document, who operates this witness, and why you may decline to relay.</li>
 <li><b>Recompute the document hash.</b> You will be served <code>doc.text</code> and
 <code>doc.sha256</code> in one response from this same server, so reading one off the other
@@ -1063,7 +1063,7 @@ curl ${base}/s/&lt;token&gt;/receipt</pre>
 <h2>What it cannot</h2>
 <ul>${li(c.unsupported_claims)}</ul>
 
-<footer>spec: github.com/amiller/attest-proxy/blob/main/ROUNDTRIP.md</footer>
+<footer>spec: github.com/amiller/attest-proxy/blob/main/docs/ROUNDTRIP.md</footer>
 </div></body></html>`;
 }
 
@@ -1157,7 +1157,7 @@ GET  $CVM/attest-proxy/s/&lt;token&gt;/receipt</pre>
 <p>Each side's receipt carries the shared structure, both turn deliverables, and <em>only its
 own</em> transcript — the other party's calls appear as commitments with inclusion proofs. That
 redaction happens in here, under the quote, so neither party has to trust the other to have done
-it. <a href="https://github.com/amiller/attest-proxy/blob/main/ROUNDTRIP.md">The spec</a> covers
+it. <a href="https://github.com/amiller/attest-proxy/blob/main/docs/ROUNDTRIP.md">The spec</a> covers
 both journeys, and the asymmetry a responder should weigh before forwarding a credential to a
 witness their counterparty operates.</p>
 
@@ -1544,7 +1544,7 @@ export default async function handler(
         "4_check": "recompute it offline with attest.py check <bundle>",
       },
       credits_meter: "use of the witness, not model tokens. Your model spend is yours.",
-      skill: "https://raw.githubusercontent.com/amiller/attest-proxy/main/skill-attest.md",
+      skill: "https://raw.githubusercontent.com/amiller/attest-proxy/main/docs/skill-attest.md",
       skill_is_a_description:
         "`skill` describes the protocol and what the resulting evidence supports. "
         + "It is a description of this service, not authority over what you report "
@@ -1720,7 +1720,7 @@ export default async function handler(
         // lived only in the skill went unperformed.
         read_this_first:
           "Before joining, GET https://raw.githubusercontent.com/amiller/attest-proxy/"
-          + "main/skill-roundtrip.md — it is short, and it carries what this manifest "
+          + "main/docs/skill-roundtrip.md — it is short, and it carries what this manifest "
           + "does not: how to verify the document you are served, and how to read the "
           + "receipt you end up with.",
         your_receipt_is_unilateral:
@@ -1782,9 +1782,9 @@ export default async function handler(
                    + `${TTL_MS / 60000} minutes and the receipt becomes collectable `
                    + "at the same URL whether or not they ever close it.",
         },
-        skill: "https://raw.githubusercontent.com/amiller/attest-proxy/main/skill-roundtrip.md",
+        skill: "https://raw.githubusercontent.com/amiller/attest-proxy/main/docs/skill-roundtrip.md",
         client: "https://github.com/amiller/attest-proxy",
-        spec: "https://github.com/amiller/attest-proxy/blob/main/ROUNDTRIP.md",
+        spec: "https://github.com/amiller/attest-proxy/blob/main/docs/ROUNDTRIP.md",
       });
     }
     if (req.method === "POST") {

@@ -1,25 +1,23 @@
 # attest-proxy
 
-You did work for a client, on their account, and now you have to bill for it. You
-want to prove what you spent and roughly what on — without handing over the
-transcript, which contains your thinking, your other matters, and everything your
-agent happened to read along the way.
+A witness that sits between you and a model API, inside an Intel TDX enclave. It
+terminates the TLS session in the enclave, commits the exact bytes of the
+exchange to a Merkle tree, and seals the root under a hardware quote. You get a
+receipt anyone can check — what was asked, what the model answered, which model,
+and that nothing else was in the context — without trusting you, or the box that
+ran it.
 
-Point your agent at this instead of the model API. You get a receipt they can
-verify and you can redact.
+Live instance: https://pod.dstack.soc1024.com/attest-proxy/
 
----
-
-Precisely: token counts and the model name arrive **inside the provider's own
-response**, over a TLS session terminated inside a TEE. They are the provider's
-figures, not yours, so a counterparty does not have to trust you for them. The
-witness commits to the exact bytes of every call and signs a Merkle root over the
-session, so any part you later disclose is provably the part that happened, and
-the signed count stops you understating the rest.
+The polished path is **adjudication**: put a question (and an optional document)
+to a model in a closed context and get a claim URL the other side verifies for
+itself. Start at [docs/ADJUDICATE.md](docs/ADJUDICATE.md). The witness can also
+record a whole agent session for selective disclosure; that is the rest of this
+page.
 
 ```
 usage        1496 in / 293 out / 92636 cached tokens   model: claude-fable-5
-not before   drand round 6365244
+not before   drand round 6365244, verified against the public chain
 session root 10a480b0978ca53e…507c3b   bound into a TDX quote
 ```
 
@@ -51,7 +49,7 @@ Or set it once per project in `<project>/.claude/settings.json`, so everything
 started in that directory is witnessed and nothing else on your machine changes.
 
 An agent handed only an invite URL can set itself up: the payload points at
-`skill-attest.md`, which describes the protocol and what the evidence supports.
+`docs/skill-attest.md`, which describes the protocol and what the evidence supports.
 Tested cold on Opus, Sonnet and Haiku.
 
 ## Disclose only what you want to
@@ -112,7 +110,7 @@ read your question and judge whether it was leading, confirm the model from the
 provider's own response, and confirm nothing else was in the context. The
 document can be withheld to its hash if it is confidential.
 
-Walkthrough: [ADJUDICATE.md](ADJUDICATE.md).
+Walkthrough: [docs/ADJUDICATE.md](docs/ADJUDICATE.md).
 
 ## Record a directory, not a command
 
@@ -128,7 +126,7 @@ attest.py sessions ~/work/acme --collect ./receipts
 
 Opt-in per directory, deliberately: on-by-default would route every repo on the
 machine through a third-party host, and that failure is silent. Full write-up,
-including what it establishes and what stays a floor: [DASHCAM.md](DASHCAM.md).
+including what it establishes and what stays a floor: [docs/DASHCAM.md](docs/DASHCAM.md).
 
 ## Two parties, one matter
 
@@ -165,22 +163,21 @@ issued. If attention rather than effort becomes the argument, the firm can
 disclose a single call carrying the clause text verbatim, with its advice still
 withheld.
 
-Full spec and both journeys: [ROUNDTRIP.md](ROUNDTRIP.md).
+Full spec and both journeys: [docs/ROUNDTRIP.md](docs/ROUNDTRIP.md).
 
 ## Verify it rather than trust it
 
 ```bash
+pip install dcap-qvl
 ./attest.py verify-quote <bundle>.json
 ```
 
-Confirms the TDX quote commits to *this* session, then diffs the platform
-measurements and the deployment's source hash against a pin on your machine.
-First run pins and says plainly that nothing is verified yet — a pin is worth
-only the audit behind it. Later runs stop on drift, which is what turns the
-operator's deploy rights from an unbounded risk into a visible event.
-
-It does not verify the DCAP signature chain; a quote from an untrusted source
-would still parse. Use a DCAP verifier when the chain itself matters.
+Confirms the quote commits to *this* session, then runs the full Intel DCAP check
+through [dcap-qvl](https://github.com/Phala-Network/dcap-qvl) — the PCK chain to
+Intel's root, TCB status, and revocation — so genuine, current Intel TDX is
+checked, not assumed. It verifies the committed drand round against the public
+chain for a real "not before" time, and diffs the base-image measurements against
+a git-tracked baseline. Each step prints what it establishes and what it does not.
 
 ## What it does not prove
 
