@@ -1104,12 +1104,13 @@ font-family:var(--mono);font-size:12px;color:var(--muted)}
 </style></head><body><div class="w">
 <header>
 <p class="eb">edge-tee · attest-proxy</p>
-<h1>An answer the other side can check</h1>
-<p class="stand">Ask a model a question about a document, inside a sealed enclave that builds
-the request itself. What comes back is the answer plus a receipt containing the entire
-prompt, so whoever you send it to can read your question, confirm nothing else was in the
-context, and see which model replied. You keep using your own credential; this service holds
-none.</p>
+<h1>A model's answer, with the whole prompt attached</h1>
+<p class="stand">You ask a model to settle a question, then paste the answer into the chat.
+The other side asks the obvious thing: what else was in the context? Here the enclave builds
+the request itself — your instruction, your document, nothing else — and hands back the answer
+with a receipt carrying the whole prompt. Whoever you send it to reads your question, confirms
+nothing else was there, and sees which model replied, from the provider's own response. You
+bring your own credential; this service holds none.</p>
 </header>
 
 <h2>Status</h2>
