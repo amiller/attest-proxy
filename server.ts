@@ -1182,11 +1182,19 @@ than silent.</p>
 
 // A committed marker leaf is stored as a call whose request_redacted is the
 // marker JSON. The upstream provider call is not a marker and does not parse.
+// Markers are committed as latin1(utf8Bytes). Parsing the latin1 string directly
+// mis-decodes multibyte UTF-8 (an en-dash in an answer became "â\x80\x93" on the
+// page), so decode latin1 → bytes → UTF-8 first, matching the Python reader.
+function markerJson(rr: string): Record<string, unknown> {
+  const bytes = Uint8Array.from(rr, (ch) => ch.charCodeAt(0) & 0xff);
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+
 function claimMarker(body: Record<string, unknown>, event: string) {
   for (const c of ((body?.calls as { request_redacted?: string }[]) ?? [])) {
     try {
-      const j = JSON.parse(c.request_redacted ?? "");
-      if (j.event === event) return j as Record<string, unknown>;
+      const j = markerJson(c.request_redacted ?? "");
+      if (j.event === event) return j;
     } catch { /* not a marker */ }
   }
   return null;
@@ -1196,8 +1204,8 @@ function claimMarkers(body: Record<string, unknown>, event: string) {
   const out: Record<string, unknown>[] = [];
   for (const c of ((body?.calls as { request_redacted?: string }[]) ?? [])) {
     try {
-      const j = JSON.parse(c.request_redacted ?? "");
-      if (j.event === event) out.push(j as Record<string, unknown>);
+      const j = markerJson(c.request_redacted ?? "");
+      if (j.event === event) out.push(j);
     } catch { /* not a marker */ }
   }
   return out;
@@ -1244,7 +1252,7 @@ function claimJson(body: Record<string, unknown>, id: string, base: string, quot
       "1_get_the_receipt": `curl -s ${receiptUrl} -o receipt.json`,
       "2_get_the_tool": "git clone https://github.com/amiller/attest-proxy",
       "3_recompute_commitments": "python3 attest-proxy/attest.py check receipt.json",
-      "4_verify_the_hardware": "python3 attest-proxy/attest.py verify-quote receipt.json",
+      "4_verify_the_hardware": "pip install dcap-qvl && python3 attest-proxy/attest.py verify-quote receipt.json",
       "5_read_the_question":
         "Read every question in claim.questions with your own eyes and judge whether "
         + "any was leading. No tool can do this for you.",
@@ -1254,15 +1262,17 @@ function claimJson(body: Record<string, unknown>, id: string, base: string, quot
       check: "Recomputes every commitment: the prompt is itemized by part (size + "
         + "hash) and the parts sum to the whole, so the question, the document hash, "
         + "the model name, and the answer all bind and nothing was edited after.",
-      verify_quote: "Verifies the TDX quote's own signature, confirms its report_data "
-        + "binds THIS session (so a real quote cannot be spliced in from another run), "
-        + "and diffs the platform measurements (mrtd, rtmr0-3) against the pod's "
-        + "published measurements. Source drift between the pod's self-reported commit "
-        + "and latest is reported, not hidden.",
+      verify_quote: "Verifies the quote binds THIS session, then runs dcap-qvl for the "
+        + "full DCAP check — the PCK chain to Intel's root, TCB status, QE identity, and "
+        + "revocation — so 'genuine Intel silicon, current TCB' is checked, not assumed. "
+        + "It also verifies the committed drand round against the public chain and prints a "
+        + "real 'not before' UTC time, and diffs the base-image measurements against a "
+        + "git-tracked baseline.",
     },
     caveats: [
-      "verify-quote proves the code is unaltered, but the PCK/TCB chain to Intel's "
-        + "root is not yet checked — genuine Intel silicon is not yet proven.",
+      "verify-quote confirms genuine Intel silicon and current TCB via dcap-qvl, but "
+        + "does NOT reproduce the expected measurements from source — that the running "
+        + "image is the published code still needs dstack-mr / a reproducible build.",
       "The live pod may self-report a published-but-not-latest commit; the tool "
         + "reports this drift and the platform measurements still match.",
       "The operator of the enclave can read the document in the clear.",
@@ -1355,9 +1365,9 @@ and what it still does NOT prove.</pre>
 <pre>curl -s ${receiptUrl} -o receipt.json
 git clone https://github.com/amiller/attest-proxy
 python3 attest-proxy/attest.py check receipt.json
+pip install dcap-qvl
 python3 attest-proxy/attest.py verify-quote receipt.json</pre>
-<p><code>check</code> recomputes every commitment, so each question, its document hash, the model name, and the answer all bind and nothing was edited. <code>verify-quote</code> confirms the quote signs this exact session and diffs the pod's
-<a href="${new URL(base).origin}/_api/verification/attest-proxy">published measurements</a>. Then read the questions above and judge for yourself whether any was leading — no tool can do that part.</p>
+<p><code>check</code> recomputes every commitment, so each question, its document hash, the model name, and the answer all bind and nothing was edited. <code>verify-quote</code> confirms the quote binds this session, then runs <code>dcap-qvl</code> for the full Intel DCAP check — chain to Intel's root, TCB status, revocation — and verifies the committed drand round to print a real "not before" time. Then read the questions above and judge for yourself whether any was leading — no tool can do that part.</p>
 <h2>What this does not prove</h2>
 <ul>${cav}</ul>
 </details>

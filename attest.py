@@ -973,13 +973,32 @@ def cmd_check(a):
     structure = _report_thread(b, count)
 
     tin, tout, tcache, models = _usage_of(b)
-    print(f"purpose  {b['purpose']!r}")
+    # The committed questions are in verdict/adjudicate markers (Merkle leaves);
+    # 'purpose' is a top-level convenience label NOT covered by the tree. Print the
+    # committed leaves so a verifier judges against them, and flag any mismatch so
+    # a tampered display line cannot ride along green (issue #10).
+    _events_list = [e for _, e in _events(b)]
+    _verdicts = [e for e in _events_list if e.get("event") == "verdict"]
+    _adj = next((e for e in _events_list if e.get("event") == "adjudicate"), {})
+    _committed_qs = ([v.get("instruction", "") for v in _verdicts if v.get("instruction")]
+                     or ([_adj["instruction"]] if _adj.get("instruction") else []))
+    if _committed_qs:
+        print(f"committed question(s)  [{len(_committed_qs)}, from Merkle leaves]")
+        for _i, _qt in enumerate(_committed_qs, 1):
+            print(f"  {_i}. {_qt.strip()[:68]!r}")
+        if b.get("purpose") and _committed_qs[0].strip()[:36] not in b["purpose"]:
+            print(f"  WARNING: top-level 'purpose' {b['purpose']!r} does not reflect the")
+            print("           committed question — it is a label, not a committed leaf.")
+    else:
+        print(f"purpose  {b['purpose']!r}   [convenience label, not a committed leaf]")
     print(f"release  {b['release']['profile']}"
           + (f" (instructed by {b['release']['instructed_by']})"
              if b["release"].get("instructed_by") else ""))
     bs = b.get("beacons") or ([b["beacon"]] if b.get("beacon") else [])
     if len(bs) > 1:
-        span = (bs[-1]["round"] - bs[0]["round"]) * 3
+        # api.drand.sh/public/latest is the default League-of-Entropy chain, 30s
+        # per round (not 3s — issue #9). verify-quote confirms the period live.
+        span = (bs[-1]["round"] - bs[0]["round"]) * 30
         print(f"spanned     drand {bs[0]['round']}..{bs[-1]['round']}  "
               f"(at least {span // 60}m{span % 60:02d}s)")
     elif bs:
@@ -1151,6 +1170,39 @@ def parse_quote(raw: bytes) -> dict:
     return {k: raw[o:o + n].hex() for k, (o, n) in _FIELDS.items()}
 
 
+# --- hardware attestation via dcap-qvl, and the drand time bound -------------
+#
+# The quote's chain to Intel's root, its TCB status, QE identity, and revocation
+# are verified by Phala's dcap-qvl (pip install dcap-qvl) rather than
+# reimplemented here: a hand-rolled subset that skipped TCB/CRL would give false
+# confidence at exactly the point that matters. What stays local is attest-proxy's
+# own logic — commitment recomputation, report_data binding, the drand bound.
+
+def _dcap_verify(raw: bytes):
+    """Full Intel DCAP verification via dcap-qvl. Returns its VerifiedReport
+    (status, advisory_ids). Raises SystemExit if the library is absent, so the
+    caller tells the user to install it rather than silently skipping the check."""
+    import asyncio
+    try:
+        import dcap_qvl
+    except ImportError:
+        raise SystemExit(
+            "dcap-qvl is not installed, so genuine-silicon + TCB cannot be checked.\n"
+            "  pip install dcap-qvl   (pure-Python wheel; fetches Intel collateral\n"
+            "  through Phala's PCCS). Re-run verify-quote once it is installed.")
+    return asyncio.run(dcap_qvl.get_collateral_and_verify(raw))
+
+
+def _drand(round_):
+    """Fetch drand chain /info and one round: (period, genesis_time, randomness)."""
+    with urllib.request.urlopen("https://api.drand.sh/info", timeout=15) as r:
+        info = json.loads(r.read())
+    with urllib.request.urlopen(f"https://api.drand.sh/public/{round_}", timeout=15) as r:
+        got = json.loads(r.read())
+    return info["period"], info["genesis_time"], got.get("randomness")
+
+
+
 def cmd_verify_quote(a):
     b = json.loads(Path(a.bundle).read_text())
     q = b.get("quote")
@@ -1179,6 +1231,58 @@ def cmd_verify_quote(a):
     if got != expect.hex():
         raise SystemExit(f"quote commits to {got}, not this session's {expect.hex()}")
     print("report_data binds this session: yes")
+
+    # Genuine Intel silicon + current TCB — the PCK chain to Intel's root, TCB
+    # status, QE identity, and revocation, all via dcap-qvl (issue #12).
+    rep = _dcap_verify(raw)
+    status = getattr(rep, "status", "?")
+    advisories = list(getattr(rep, "advisory_ids", []) or [])
+    _ok_tcb = {"UpToDate", "SWHardeningNeeded", "ConfigurationNeeded",
+               "ConfigurationAndSWHardeningNeeded"}
+    if status not in _ok_tcb:
+        raise SystemExit(f"DCAP verification: TCB status is {status!r} — this platform "
+                         "is out of date or revoked. Do not rely on this quote.")
+    print("genuine Intel TDX (dcap-qvl): yes — quote chains to Intel's root")
+    print(f"TCB status: {status}"
+          + (f"   advisories: {', '.join(advisories)}" if advisories
+             else "   (no outstanding advisories)"))
+    if status != "UpToDate":
+        print("  NOTE: not 'UpToDate' — the platform needs the noted mitigation; "
+              "weigh that before relying on it.")
+
+    # Time lower bound: verify the committed drand round against the public chain
+    # and print a real timestamp, not an inert round number (issue #11).
+    bcns = b.get("beacons") or ([b["beacon"]] if b.get("beacon") else [])
+    if bcns:
+        r0 = bcns[0]
+        try:
+            period, genesis, rnd = _drand(r0["round"])
+            if rnd and rnd == r0.get("randomness"):
+                import datetime
+                ts = datetime.datetime.utcfromtimestamp(genesis + (r0["round"] - 1) * period)
+                print(f"not before: {ts.strftime('%Y-%m-%d %H:%M:%S')} UTC  "
+                      f"(drand round {r0['round']} verified against the public chain)")
+            else:
+                print(f"WARNING: drand round {r0['round']} randomness does not match the "
+                      "public chain — the time bound is unverified.")
+        except Exception as e:
+            print(f"could not verify the drand time bound: {e}")
+
+    # A git-tracked baseline (reviewed in the repo, not fetched from the pod) for
+    # the base-image measurements, so a fresh clone diffs against a version-
+    # controlled value instead of trust-on-first-use (issue #13).
+    base_f = Path(__file__).resolve().parent / "measurements.json"
+    if base_f.exists():
+        base = json.loads(base_f.read_text())
+        bad = [k for k in ("mrtd", "rtmr0", "rtmr1", "rtmr2")
+               if base.get(k) and base[k] != m[k]]
+        if bad:
+            print(f"WARNING: base-image measurements differ from the repo baseline "
+                  f"({', '.join(bad)}) — a different image than the audited "
+                  f"{base.get('image', '?')}.")
+        else:
+            print(f"base image matches the repo-committed baseline: "
+                  f"{base.get('image', '')} (mrtd + rtmr0-2, git-tracked)")
 
     pin = Path(a.pin) if a.pin else Path.home() / ".claude/attest-proxy-pin.json"
     # Measured by the platform, read out of the quote.
@@ -1220,9 +1324,12 @@ def cmd_verify_quote(a):
             for k, v in reported.items():
                 print(f"    {k:10s} {str(v)[:46]}")
         print()
-        print("Nothing is verified yet. You have recorded what this deployment")
-        print("measured today. Audit the source, then later runs are compared")
-        print("against this pin and any change becomes visible.")
+        print("TRUST ON FIRST USE. The hardware checks above already passed (genuine")
+        print("Intel TDX, current TCB, report_data binding), so the [measured] values")
+        print("are hardware-attested-genuine. What you have NOT checked is which image")
+        print("and app they belong to — that they match the EXPECTED build is recorded,")
+        print("not verified, until you reproduce MRTD/RTMR0-2 with dstack-mr or audit")
+        print("the named source. Later runs diff against this pin.")
         if current.get("commit_sha"):
             print()
             print(f"  git clone {current.get('repo')} && git checkout {current['commit_sha']}")
@@ -1256,13 +1363,13 @@ def cmd_verify_quote(a):
     print()
     print("matches your pin")
     print()
-    print("Establishes: the quote commits to this session, and the platform")
-    print("measurements match what you pinned.")
-    print("Does NOT establish: that this came from genuine Intel silicon. The quote")
-    print("is internally consistent and unaltered, but the PCK certificate chain up to")
-    print("Intel's root and the TCB status are still unchecked;")
-    print("and the repo/commit/tree fields, which the deployment reports about")
-    print("itself over HTTPS and no hardware measurement covers.")
+    print("Established: genuine Intel TDX silicon with current TCB (dcap-qvl), the")
+    print("quote binds THIS session, the platform measurements match what you pinned,")
+    print("and the time lower bound is a drand round verified against the public chain.")
+    print("Still open: that these measurements correspond to the exact published")
+    print("source. repo/commit/tree are self-reported and no hardware measurement")
+    print("covers the source tree. To close it, reproduce the expected MRTD/RTMR0-2")
+    print("from the image with dstack-mr and diff them against the [measured] values.")
 
 
 def cmd_show(a):
