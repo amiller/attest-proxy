@@ -1289,90 +1289,131 @@ function claimPage(body: Record<string, unknown>, id: string, base: string, quot
   const j = claimJson(body, id, base, quoteAvailable);
   const c = j.claim;
   const receiptUrl = `${base}/s/${id}/receipt`;
-  const cav = j.caveats.map((x) => `<li>${esc(x)}</li>`).join("");
+  const host = new URL(base).host;
   const qs = (j.questions && j.questions.length) ? j.questions
     : [{ question: c.question, answer: c.answer, model: c.model, provider: c.provider,
          declined: false, document: c.document }];
   const many = qs.length > 1;
-  const manifestHtml = qs.map((q, i) => `
-<div class="qa">
-<p class="qn">${many ? `Question ${i + 1} of ${qs.length}` : "The question, exactly as asked"}</p>
-<pre class="q">${esc(String(q.question))}</pre>
-<div class="ans${q.declined ? " dec" : ""}">${esc(String(q.answer))}</div>
-<p class="meta">${esc(String(q.model))} · ${esc(String(q.provider))} · the name the provider's own API returned${q.document && q.document.bytes ? ` · document ${esc(String(q.document.name))} sha256 ${esc(String(q.document.sha256).slice(0, 24))}…` : ""}</p>
+  const models = [...new Set(qs.map((q) => String(q.model)).filter(Boolean))].join(", ");
+
+  // References out of the dstack event log, and the time lower bound out of the
+  // beacon. Humans never see these values; they anchor the meanings below and
+  // the agent checks them.
+  const q = (body.quote ?? {}) as { event_log?: string; vm_config?: string };
+  const el = JSON.parse(q.event_log ?? "[]") as { imr?: number; event?: string; event_payload?: string }[];
+  const pick = (n: string) => el.find((e) => e.imr === 3 && e.event === n)?.event_payload ?? "";
+  const appid = pick("app-id"), mrkms = pick("mr-kms");
+  const image = (JSON.parse(q.vm_config ?? "{}") as { image?: string }).image ?? "";
+  const bcn = (body.beacon ?? (body.beacons as unknown[] | undefined)?.[0]) as { round?: number } | undefined;
+  // default drand chain: genesis 1595431050, 30s/round
+  const notBefore = bcn?.round
+    ? new Date((1595431050 + (bcn.round - 1) * 30) * 1000).toISOString().replace("T", " ").slice(0, 19)
+    : "";
+
+  const xq = qs.map((qq, i) => `
+<div class="xq">
+<div class="xl">${many ? `Question ${i + 1} of ${qs.length}` : "Question"}</div>
+<div class="xqq">${esc(String(qq.question))}</div>
+<div class="xqa${qq.declined ? " dec" : ""}">${esc(String(qq.answer))}</div>
+<div class="xqm">${esc(String(qq.model))} — the name ${esc(String(qq.provider))} returned</div>
 </div>`).join("");
+
+  const g = (meaning: string, ref = "") =>
+    `<li><span class="gm">${meaning}</span>${ref ? `<span class="gr">${ref}</span>` : ""}</li>`;
+
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Attested adjudication</title><style>
-:root{--g:#FAFAF9;--i:#14212B;--m:#5A6B77;--r:#DFE4E8;--a:#1B4D6B;--ok:#166534;--no:#9B1C1C;
+<title>attest-proxy claim ${id.slice(0, 8)}</title><style>
+:root{--bg:#f4f6f7;--card:#fff;--ink:#181c20;--mut:#616a72;--faint:#8a929a;--line:#e2e6ea;
+--ac:#2f5d63;--acbg:#e9f1f1;--warn:#8a5a12;--no:#9b1c1c;
+--sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
 --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-body{background:var(--g);color:var(--i);margin:0;padding:0 22px 72px;
-font:17px/1.62 Georgia,"Iowan Old Style","Times New Roman",serif}
-.w{max-width:720px;margin:0 auto}
-header{padding:52px 0 20px;border-bottom:2px solid var(--i)}
-h1{font-size:32px;line-height:1.15;margin:0 0 12px;letter-spacing:-.015em}
-.eb{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--m);margin:0 0 14px}
-.stand{color:var(--m);font-size:18px;margin:0}
-h2{font-size:20px;margin:34px 0 10px}
-p{margin:0 0 13px}ul{margin:0 0 13px;padding-left:22px}li{margin-bottom:7px}
-code{font-family:var(--mono);font-size:.85em;background:#F1F3F5;padding:1px 5px;border-radius:3px}
-pre{font-family:var(--mono);font-size:12.5px;line-height:1.65;background:#fff;border:1px solid var(--r);
-padding:14px 16px;overflow-x:auto;margin:0 0 15px;white-space:pre-wrap;word-break:break-word}
-.ans{background:#fff;border:1px solid var(--r);border-left:3px solid var(--a);padding:14px 16px;
-margin:0 0 8px;white-space:pre-wrap}
-.ans.dec{border-left-color:var(--no);color:var(--m);font-style:italic}
-.qa{margin:0 0 26px}
-.qn{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--a);margin:0 0 8px}
-.q{margin:0 0 10px}
-.verify{background:#fff;border:1px solid var(--r);border-radius:8px;padding:16px 18px;margin:8px 0 22px}
-.verify h2{margin:0 0 8px;font-size:17px}
-details{border-top:1px solid var(--r);padding-top:14px;margin-top:8px}
-summary{font-family:var(--mono);font-size:13px;color:var(--a);cursor:pointer;list-style:none}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15.5px;line-height:1.55;padding:0 18px 64px}
+.r{max-width:660px;margin:0 auto}
+.head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;
+padding:22px 0 12px;border-bottom:2px solid var(--ink)}
+.hid{font-family:var(--mono);font-size:13px}
+.hid b{font-size:15px;letter-spacing:.02em}
+.hlabel{font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);display:block;margin-bottom:3px}
+.state{font-family:var(--mono);font-size:11.5px;color:${quoteAvailable ? "var(--ac)" : "var(--no)"}}
+.lbl{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin:30px 0 12px;font-weight:600}
+.lbl .sub{text-transform:none;letter-spacing:0;color:var(--faint);font-weight:400}
+.xq{margin:0 0 16px}
+.xl{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ac);margin:0 0 6px}
+.xqq{font-weight:600;white-space:pre-wrap;margin:0 0 8px}
+.xqa{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--ac);border-radius:0 7px 7px 0;padding:12px 14px;white-space:pre-wrap}
+.xqa.dec{border-left-color:var(--no);color:var(--mut);font-style:italic}
+.xqm{font-family:var(--mono);font-size:11.5px;color:var(--faint);margin:6px 0 0}
+.pnote{font-size:13.5px;color:var(--mut);margin:2px 0 0}
+.yj{background:var(--acbg);border:1px solid #cfe0e0;border-radius:8px;padding:13px 15px;margin:14px 0 0}
+.yj b{color:var(--ac)}
+.guar{list-style:none;margin:0;padding:0}
+.guar li{padding:9px 0 9px 24px;border-bottom:1px solid var(--line);position:relative}
+.guar li:before{content:"";position:absolute;left:2px;top:15px;width:9px;height:9px;border:1.5px solid var(--ac);border-radius:2px}
+.gm{display:block}
+.gr{display:block;font-family:var(--mono);font-size:11.5px;color:var(--faint);margin-top:3px}
+.guar code{font-family:var(--mono);font-size:11.5px;background:#eef1f3;padding:1px 5px;border-radius:4px;word-break:break-all}
+details{margin-top:4px}
+summary{font-family:var(--mono);font-size:11.5px;color:var(--ac);cursor:pointer;list-style:none}
 summary::-webkit-details-marker{display:none}
-summary::before{content:"▸ ";color:var(--m)}
-details[open] summary::before{content:"▾ "}
-.meta{font-family:var(--mono);font-size:12px;color:var(--m);margin:0 0 6px}
-.banner{border-left:3px solid ${quoteAvailable ? "var(--ok)" : "var(--no)"};padding:8px 0 8px 18px;margin:0 0 18px}
-.banner b{color:${quoteAvailable ? "var(--ok)" : "var(--no)"}}
-a{color:var(--a)}
-footer{margin-top:40px;padding-top:15px;border-top:1px solid var(--r);font-family:var(--mono);font-size:12px;color:var(--m)}
-</style></head><body><div class="w">
-<header><p class="eb">edge-tee · attested adjudication</p>
-<h1>${many ? "Questions put to a model, on the record" : "A question put to a model, on the record"}</h1>
-<p class="stand">Each ${many ? "question below was" : "question below was"} composed inside a sealed enclave and answered in a context you can see in full — no prior turns, no hidden setup. You don't have to take the sender's word for it; you or your agent can confirm nothing else was in the prompt.</p></header>
+summary:before{content:"▸ ";color:var(--faint)}
+details[open] summary:before{content:"▾ "}
+details .gr{margin:6px 0 0}
+pre{font-family:var(--mono);font-size:12px;line-height:1.6;background:var(--ink);color:#e7ebef;border-radius:7px;
+padding:12px 14px;overflow-x:auto;margin:8px 0;white-space:pre-wrap;word-break:break-word}
+.notg{list-style:none;margin:0;padding:0;color:var(--mut);font-size:14px}
+.notg li{padding:7px 0 7px 20px;position:relative}
+.notg li:before{content:"—";position:absolute;left:2px;color:var(--faint)}
+a{color:var(--ac)}
+footer{margin-top:40px;padding-top:14px;border-top:1px solid var(--line);font-family:var(--mono);font-size:11.5px;color:var(--faint)}
+</style></head><body><div class="r">
 
-<div class="banner"><p><b>${quoteAvailable ? "Attested." : "Dev mode — not attested."}</b>
-${quoteAvailable
-  ? "Sealed under one hardware quote over the committed root."
-  : "This deployment issues NO quote. Nothing here is proof yet; do not present it as attested."}</p></div>
-
-${manifestHtml}
-${c.not_before_drand_round ? `<p class="meta">ran no earlier than drand round ${c.not_before_drand_round}</p>` : ""}
-
-<div class="verify">
-<h2>Verify it</h2>
-<p>Hand this page to your agent — one step, and it reaches its own verdict from the hardware quote, not from anything the sender or this server says:</p>
-<pre>Read ${base}/claim/${id}.json and follow it. Validate this
-adjudication end to end, then tell me exactly what checks out
-and what it still does NOT prove.</pre>
+<div class="head">
+<div class="hid"><span class="hlabel">attest-proxy claim</span><b>${id}</b></div>
+<div style="text-align:right"><span class="hlabel">instance</span><span class="state">${host} · ${quoteAvailable ? "sealed" : "DEV — not attested"}</span></div>
 </div>
 
-<details>
-<summary>Explain more — how this works, and what it does and doesn't prove</summary>
-<h2>What the seal binds</h2>
-<p>Each question and its answer are committed by one hash, and every commitment is sealed into an Intel TDX quote over the session root. Edit any question or answer and the seal breaks; the seal is signed up to Intel's roots, not this operator's. The model name on each is the one the provider's own API returned, never what the sender typed.</p>
-<h2>Check it by hand</h2>
+<div class="lbl">The exchange</div>
+${xq}
+<p class="pnote">This was the entire prompt — no prior turns, no hidden setup.</p>
+
+<div class="yj">Your call: read the ${many ? "questions and answers" : "question and answer"} above and judge <b>whether the ${many ? "questions were" : "question was"} fair and the ${many ? "answers hold" : "answer holds"} up</b>. That part is yours. Everything below is settled by the record so you don't have to check it.</div>
+
+<div class="lbl">Guaranteed by the record <span class="sub">— your agent re-derives each</span></div>
+<ul class="guar">
+${g(`The ${many ? "questions and answers" : "question and answer"} shown are the exact bytes sent and received, unedited.`)}
+${g(`${many ? "Each model" : "The model"} named (${esc(models)}) is the one the provider's own API returned, not a label the sender typed.`)}
+${notBefore ? g(`Ran no earlier than <b>${notBefore} UTC</b>.`, `drand round ${bcn?.round}, verified against the public randomness beacon`) : ""}
+<li><span class="gm">Ran published dstack code.</span>
+<details><summary>the references your agent checks</summary>
+${image ? `<div class="gr">base image <code>${esc(image)}</code> — reproducible with dstack-mr</div>` : ""}
+${appid ? `<div class="gr">app authorized on-chain by contract <code>0x${esc(appid)}</code> — it governs which builds are allowed to run</div>` : ""}
+${mrkms ? `<div class="gr">keys held by the dstack KMS <code>${esc(mrkms.slice(0, 32))}…</code> — itself an attested dstack instance under its own on-chain governance</div>` : ""}
+</details></li>
+${quoteAvailable ? g("Attested by an Intel TDX platform.", "your agent verifies the chain to Intel's root, TCB status and revocation via dcap-qvl") : ""}
+</ul>
+
+<div class="lbl">Confirm it yourself</div>
+<p>Hand this record to your agent — it re-derives every line above from the quote and the commitments, and reports what holds:</p>
+<pre>Read ${base}/claim/${id}.json and verify it end to end, then
+tell me what checks out and what it still does NOT prove.</pre>
+<details><summary>or by hand</summary>
 <pre>curl -s ${receiptUrl} -o receipt.json
 git clone https://github.com/amiller/attest-proxy
 python3 attest-proxy/attest.py check receipt.json
 pip install dcap-qvl
-python3 attest-proxy/attest.py verify-quote receipt.json</pre>
-<p><code>check</code> recomputes every commitment, so each question, its document hash, the model name, and the answer all bind and nothing was edited. <code>verify-quote</code> confirms the quote binds this session, then runs <code>dcap-qvl</code> for the full Intel DCAP check — chain to Intel's root, TCB status, revocation — and verifies the committed drand round to print a real "not before" time. Then read the questions above and judge for yourself whether any was leading — no tool can do that part.</p>
-<h2>What this does not prove</h2>
-<ul>${cav}</ul>
-</details>
+python3 attest-proxy/attest.py verify-quote receipt.json</pre></details>
 
-<footer>receipt ${id} · github.com/amiller/attest-proxy</footer>
+<div class="lbl">Not settled here</div>
+<ul class="notg">
+<li>Whether the ${many ? "answers are" : "answer is"} correct — yours to judge, against the question you can read above.</li>
+<li>That the producer asked only once. Publishing the question makes shopping visible, not impossible.</li>
+<li>That the running image is the published source — that still needs a reproducible build (dstack-mr).</li>
+<li>The operator of the enclave can read the transcript in the clear.</li>
+</ul>
+
+<footer>attest-proxy · ${host} · github.com/amiller/attest-proxy</footer>
 </div></body></html>`;
 }
 
