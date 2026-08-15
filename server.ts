@@ -1297,6 +1297,15 @@ function claimPage(body: Record<string, unknown>, id: string, base: string, quot
   const many = qs.length > 1;
   const models = [...new Set(qs.map((q) => String(q.model)).filter(Boolean))].join(", ");
 
+  // Unfurl card: what a friend sees on paste, before anyone clicks or verifies.
+  const attr = (s: string) => esc(s).replace(/"/g, "&quot;");
+  const clip = (s: string, n: number) => {
+    const t = s.replace(/\s+/g, " ").trim();
+    return t.length > n ? t.slice(0, n - 1) + "…" : t;
+  };
+  const ogTitle = many ? `${qs.length} sealed questions to ${models}` : clip(String(qs[0].question), 110);
+  const ogDesc = `Sealed exchange with ${models}. The ${many ? "questions and answers are" : "question and answer are"} exactly what was sent and received, with nothing else in the context. It takes no position on whether the ${many ? "answers are" : "answer is"} right.`;
+
   // References out of the dstack event log, and the time lower bound out of the
   // beacon. Humans never see these values; they anchor the meanings below and
   // the agent checks them.
@@ -1324,7 +1333,16 @@ function claimPage(body: Record<string, unknown>, id: string, base: string, quot
 
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>attest-proxy claim ${id.slice(0, 8)}</title><style>
+<title>attest-proxy claim ${id.slice(0, 8)}</title>
+<meta property="og:type" content="website"/>
+<meta property="og:site_name" content="attest-proxy"/>
+<meta property="og:url" content="${base}/claim/${id}"/>
+<meta property="og:title" content="${attr(ogTitle)}"/>
+<meta property="og:description" content="${attr(ogDesc)}"/>
+<meta name="twitter:card" content="summary"/>
+<meta name="twitter:title" content="${attr(ogTitle)}"/>
+<meta name="twitter:description" content="${attr(ogDesc)}"/>
+<style>
 :root{--bg:#f4f6f7;--card:#fff;--ink:#181c20;--mut:#616a72;--faint:#8a929a;--line:#e2e6ea;
 --ac:#2f5d63;--acbg:#e9f1f1;--warn:#8a5a12;--no:#9b1c1c;
 --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
@@ -1338,6 +1356,8 @@ padding:22px 0 12px;border-bottom:2px solid var(--ink)}
 .hid b{font-size:15px;letter-spacing:.02em}
 .hlabel{font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);display:block;margin-bottom:3px}
 .state{font-family:var(--mono);font-size:11.5px;color:${quoteAvailable ? "var(--ac)" : "var(--no)"}}
+.scope{font-size:14.5px;color:var(--mut);margin:16px 0 2px}
+.scope b{color:var(--ink)}
 .lbl{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin:30px 0 12px;font-weight:600}
 .lbl .sub{text-transform:none;letter-spacing:0;color:var(--faint);font-weight:400}
 .xq{margin:0 0 16px}
@@ -1376,6 +1396,8 @@ footer{margin-top:40px;padding-top:14px;border-top:1px solid var(--line);font-fa
 <div class="hid"><a class="hlabel hlink" href="${base}/">attest-proxy claim ↗</a><b>${id}</b></div>
 <div style="text-align:right"><span class="hlabel">instance</span><span class="state">${host} · ${quoteAvailable ? "sealed" : "DEV — not attested"}</span></div>
 </div>
+
+<p class="scope"><b>What this record certifies:</b> the exchange below took place exactly as shown, in a sealed context with nothing else in it. It takes no position on whether the ${many ? "answers are" : "answer is"} right.</p>
 
 <div class="lbl">The exchange</div>
 ${xq}
