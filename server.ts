@@ -1320,16 +1320,33 @@ function claimPage(body: Record<string, unknown>, id: string, base: string, quot
     ? new Date((1595431050 + (bcn.round - 1) * 30) * 1000).toISOString().replace("T", " ").slice(0, 19)
     : "";
 
+  // Answers carry light markdown (**bold**, blank-line paragraphs); render it.
+  const md = (s: string) =>
+    esc(s).trim().split(/\n\n+/).map((p) =>
+      `<p>${p.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/\n/g, "<br>")}</p>`).join("");
+
   const xq = qs.map((qq, i) => `
-<div class="xq">
-<div class="xl">${many ? `Question ${i + 1} of ${qs.length}` : "Question"}</div>
-<div class="xqq">${esc(String(qq.question))}</div>
-<div class="xqa${qq.declined ? " dec" : ""}">${esc(String(qq.answer))}</div>
-<div class="xqm">${esc(String(qq.model))} — the name ${esc(String(qq.provider))} returned</div>
+<div class="qa">
+<div class="qn">${many ? `Question ${i + 1} of ${qs.length}` : "The question"}</div>
+<div class="qq">${esc(String(qq.question))}</div>
+<div class="aa${qq.declined ? " dec" : ""}">${md(String(qq.answer))}</div>
 </div>`).join("");
 
-  const g = (meaning: string, ref = "") =>
-    `<li><span class="gm">${meaning}</span>${ref ? `<span class="gr">${ref}</span>` : ""}</li>`;
+  const chips = [
+    `<span class="chip"><span class="ck">✓</span> Sealed context</span>`,
+    `<span class="chip"><span class="ck">✓</span> <span class="mo">${esc(models)}</span> — provider-named</span>`,
+    quoteAvailable ? `<span class="chip"><span class="ck">✓</span> Intel TDX</span>` : "",
+    notBefore ? `<span class="chip"><span class="ck">✓</span> Not before ${notBefore} UTC</span>` : "",
+  ].filter(Boolean).join("");
+
+  const refs = [
+    `bytes shown are exactly what was sent and received, unedited`,
+    image ? `base image <code>${esc(image)}</code> — reproducible with dstack-mr` : "",
+    appid ? `authorized on-chain by contract <code>0x${esc(appid)}</code>, which governs which builds may run` : "",
+    mrkms ? `keys held by the dstack KMS <code>${esc(mrkms.slice(0, 16))}…</code>, itself an attested dstack instance` : "",
+    notBefore ? `time from <code>drand round ${bcn?.round}</code>, checked against the public beacon` : "",
+    quoteAvailable ? `chain to Intel's root, TCB status and revocation, via dcap-qvl` : "",
+  ].filter(Boolean).map((t) => `<div>${t}</div>`).join("");
 
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
@@ -1343,86 +1360,78 @@ function claimPage(body: Record<string, unknown>, id: string, base: string, quot
 <meta name="twitter:title" content="${attr(ogTitle)}"/>
 <meta name="twitter:description" content="${attr(ogDesc)}"/>
 <style>
-:root{--bg:#f4f6f7;--card:#fff;--ink:#181c20;--mut:#616a72;--faint:#8a929a;--line:#e2e6ea;
---ac:#2f5d63;--acbg:#e9f1f1;--warn:#8a5a12;--no:#9b1c1c;
+:root{--bg:#eef1f0;--paper:#fbfbf9;--ink:#1a1f22;--mut:#5a646b;--faint:#8c959c;
+--rule:#d7dcd9;--ac:#2f5d63;--acbg:#e7efef;--good:#1c7a52;--no:#9b1c1c;
 --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
 --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15.5px;line-height:1.55;padding:0 18px 64px}
-.r{max-width:660px;margin:0 auto}
-.head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;
-padding:22px 0 12px;border-bottom:2px solid var(--ink)}
-.hid{font-family:var(--mono);font-size:13px}
-.hid b{font-size:15px;letter-spacing:.02em}
-.hlabel{font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);display:block;margin-bottom:3px}
-.state{font-family:var(--mono);font-size:11.5px;color:${quoteAvailable ? "var(--ac)" : "var(--no)"}}
-.scope{font-size:14.5px;color:var(--mut);margin:16px 0 2px}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.55;padding:28px 16px 60px}
+.paper{max-width:560px;margin:0 auto;background:var(--paper);border:1px solid var(--rule);
+box-shadow:0 1px 0 #fff inset,0 6px 24px rgba(30,45,50,.07);padding:26px 30px 30px}
+.top{display:flex;justify-content:space-between;align-items:center;font-family:var(--mono)}
+.brand{font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--mut);font-weight:600;text-decoration:none}
+.brand:hover{color:var(--ac)}
+.seal{font-size:11px;color:${quoteAvailable ? "var(--good)" : "var(--no)"};display:flex;align-items:center;gap:5px}
+.seal .dot{width:7px;height:7px;border-radius:50%;background:${quoteAvailable ? "var(--good)" : "var(--no)"};display:inline-block}
+.cid{font-family:var(--mono);font-size:11px;color:var(--faint);margin:3px 0 0;word-break:break-all}
+.scope{font-size:13px;color:var(--mut);margin:16px 0 0}
 .scope b{color:var(--ink)}
-.lbl{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin:30px 0 12px;font-weight:600}
-.lbl .sub{text-transform:none;letter-spacing:0;color:var(--faint);font-weight:400}
-.xq{margin:0 0 16px}
-.xl{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ac);margin:0 0 6px}
-.xqq{font-weight:600;white-space:pre-wrap;margin:0 0 8px}
-.xqa{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--ac);border-radius:0 7px 7px 0;padding:12px 14px;white-space:pre-wrap}
-.xqa.dec{border-left-color:var(--no);color:var(--mut);font-style:italic}
-.xqm{font-family:var(--mono);font-size:11.5px;color:var(--faint);margin:6px 0 0}
-.pnote{font-size:13.5px;color:var(--mut);margin:2px 0 0}
-.yj{background:var(--acbg);border:1px solid #cfe0e0;border-radius:8px;padding:13px 15px;margin:14px 0 0}
-.yj b{color:var(--ac)}
-.guar{list-style:none;margin:0;padding:0}
-.guar li{padding:9px 0 9px 24px;border-bottom:1px solid var(--line);position:relative}
-.guar li:before{content:"";position:absolute;left:2px;top:15px;width:9px;height:9px;border:1.5px solid var(--ac);border-radius:2px}
-.gm{display:block}
-.gr{display:block;font-family:var(--mono);font-size:11.5px;color:var(--faint);margin-top:3px}
-.guar code{font-family:var(--mono);font-size:11.5px;background:#eef1f3;padding:1px 5px;border-radius:4px;word-break:break-all}
-details{margin-top:4px}
-summary{font-family:var(--mono);font-size:11.5px;color:var(--ac);cursor:pointer;list-style:none}
+.dash{border:0;border-top:1px dashed var(--rule);margin:20px 0}
+.sec{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--faint);font-weight:700;margin:0 0 12px}
+.sec .sub{letter-spacing:.02em;text-transform:none;color:var(--faint);font-weight:400}
+.qa{margin:0 0 18px}
+.qn{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--ac);margin:0 0 5px}
+.qq{font-weight:600;white-space:pre-wrap;margin:0 0 8px;font-size:14.5px}
+.aa{border-left:2px solid var(--ac);padding:0 0 0 13px;color:#23282b}
+.aa p{margin:0 0 8px}.aa p:last-child{margin:0}
+.aa.dec{border-left-color:var(--no);color:var(--mut);font-style:italic}
+.pn{font-size:12px;color:var(--mut);margin:0}
+.chips{display:flex;flex-wrap:wrap;gap:7px;margin:2px 0 0}
+.chip{display:flex;align-items:center;gap:6px;font-size:12px;background:var(--acbg);
+border:1px solid #cfe0e0;border-radius:20px;padding:5px 11px 5px 9px;color:#274a4f}
+.chip .ck{color:var(--good);font-weight:700}
+.chip .mo{font-family:var(--mono);font-size:11px}
+details{margin:0}
+summary{list-style:none;outline:none;font-family:var(--mono);font-size:11px;color:var(--ac);cursor:pointer;margin:12px 0 0;display:inline-block}
 summary::-webkit-details-marker{display:none}
 summary:before{content:"▸ ";color:var(--faint)}
 details[open] summary:before{content:"▾ "}
-details .gr{margin:6px 0 0}
-pre{font-family:var(--mono);font-size:12px;line-height:1.6;background:var(--ink);color:#e7ebef;border-radius:7px;
-padding:12px 14px;overflow-x:auto;margin:8px 0;white-space:pre-wrap;word-break:break-word}
-.notg{list-style:none;margin:0;padding:0;color:var(--mut);font-size:14px}
-.notg li{padding:7px 0 7px 20px;position:relative}
-.notg li:before{content:"—";position:absolute;left:2px;color:var(--faint)}
+.det{font-size:12px;color:var(--mut);margin:8px 0 0}
+.det code{font-family:var(--mono);font-size:11px;background:#eef1ef;padding:1px 5px;border-radius:4px;word-break:break-all}
+.det>div{margin:0 0 5px}
+pre{font-family:var(--mono);font-size:11.5px;background:#20262a;color:#e7ecef;border-radius:6px;
+padding:11px 13px;overflow-x:auto;white-space:pre-wrap;word-break:break-word;margin:6px 0 0}
+.confirm{font-size:12.5px;color:var(--mut);margin:0}
+.caveat{font-size:11.5px;color:var(--faint);margin:16px 0 0;line-height:1.55}
+.caveat b{color:var(--mut)}
 a{color:var(--ac)}
-.hlink{color:var(--mut);text-decoration:none}
-.hlink:hover{color:var(--ac)}
-footer{margin-top:40px;padding-top:14px;border-top:1px solid var(--line);font-family:var(--mono);font-size:11.5px;color:var(--faint)}
-</style></head><body><div class="r">
+footer{margin:22px 0 0;padding-top:14px;border-top:1px dashed var(--rule);font-family:var(--mono);font-size:11px;color:var(--faint)}
+footer a{color:var(--mut);text-decoration:none}
+footer a:hover{color:var(--ac)}
+</style></head><body><div class="paper">
 
-<div class="head">
-<div class="hid"><a class="hlabel hlink" href="${base}/">attest-proxy claim ↗</a><b>${id}</b></div>
-<div style="text-align:right"><span class="hlabel">instance</span><span class="state">${host} · ${quoteAvailable ? "sealed" : "DEV — not attested"}</span></div>
-</div>
+<div class="top"><a class="brand" href="${base}/">attest-proxy · receipt</a>
+<span class="seal"><span class="dot"></span>${quoteAvailable ? "sealed" : "DEV — not attested"}</span></div>
+<div class="cid">${host} / claim / ${id}</div>
 
 <p class="scope"><b>What this record certifies:</b> the exchange below took place exactly as shown, in a sealed context with nothing else in it. It takes no position on whether the ${many ? "answers are" : "answer is"} right.</p>
 
-<div class="lbl">The exchange</div>
+<hr class="dash">
+<div class="sec">The exchange <span class="sub">— read it, judge it yourself</span></div>
 ${xq}
-<p class="pnote">This was the entire prompt — no prior turns, no hidden setup, and <b>no tools, no web, no retrieval</b>. Each answer is the model's own, from training; nothing was looked up.</p>
+<p class="pn">This was the entire prompt — no prior turns, no hidden setup, and <b>no tools, no web, no retrieval</b>. Each answer is the model's own recall, nothing looked up.</p>
 
-<div class="yj">Your call: read the ${many ? "questions and answers" : "question and answer"} above and judge <b>whether the ${many ? "questions were" : "question was"} fair and the ${many ? "answers hold" : "answer holds"} up</b>. That part is yours. Everything below is settled by the record so you don't have to check it.</div>
+<hr class="dash">
+<div class="sec">Guaranteed by the record <span class="sub">— your agent re-derives each</span></div>
+<div class="chips">${chips}</div>
+<details><summary>what each references</summary>
+<div class="det">${refs}</div></details>
 
-<div class="lbl">Guaranteed by the record <span class="sub">— your agent re-derives each</span></div>
-<ul class="guar">
-${g(`The ${many ? "questions and answers" : "question and answer"} shown are the exact bytes sent and received, unedited.`)}
-${g(`${many ? "Each model" : "The model"} named (${esc(models)}) is the one the provider's own API returned, not a label the sender typed.`)}
-${notBefore ? g(`Ran no earlier than <b>${notBefore} UTC</b>.`, `drand round ${bcn?.round}, verified against the public randomness beacon`) : ""}
-<li><span class="gm">Ran published dstack code.</span>
-<details><summary>the references your agent checks</summary>
-${image ? `<div class="gr">base image <code>${esc(image)}</code> — reproducible with dstack-mr</div>` : ""}
-${appid ? `<div class="gr">app authorized on-chain by contract <code>0x${esc(appid)}</code> — it governs which builds are allowed to run</div>` : ""}
-${mrkms ? `<div class="gr">keys held by the dstack KMS <code>${esc(mrkms.slice(0, 32))}…</code> — itself an attested dstack instance under its own on-chain governance</div>` : ""}
-</details></li>
-${quoteAvailable ? g("Attested by an Intel TDX platform.", "your agent verifies the chain to Intel's root, TCB status and revocation via dcap-qvl") : ""}
-</ul>
-
-<div class="lbl">Confirm it yourself</div>
-<p>Hand this record to your agent — it re-derives every line above from the quote and the commitments, and reports what holds:</p>
-<pre>Read ${base}/claim/${id}.json and verify it end to end, then
-tell me what checks out and what it still does NOT prove.</pre>
+<hr class="dash">
+<div class="sec">Confirm it yourself</div>
+<p class="confirm">Hand the record to your agent — it re-derives every line above and reports what holds:</p>
+<pre>Read ${base}/claim/${id}.json and verify it end to end,
+then tell me what checks out and what it still does NOT prove.</pre>
 <details><summary>or by hand</summary>
 <pre>curl -s ${receiptUrl} -o receipt.json
 git clone https://github.com/amiller/attest-proxy
@@ -1430,13 +1439,7 @@ python3 attest-proxy/attest.py check receipt.json
 pip install dcap-qvl
 python3 attest-proxy/attest.py verify-quote receipt.json</pre></details>
 
-<div class="lbl">Not settled here</div>
-<ul class="notg">
-<li>Whether the ${many ? "answers are" : "answer is"} correct — yours to judge, against the question you can read above. ${many ? "They are the model's" : "It is the model's"} own recall, with no tools and nothing checked against sources.</li>
-<li>That the producer asked only once. Publishing the question makes shopping visible, not impossible.</li>
-<li>That the running image is the published source — that still needs a reproducible build (dstack-mr).</li>
-<li>The operator of the enclave can read the transcript in the clear.</li>
-</ul>
+<p class="caveat"><b>Not settled here:</b> whether the ${many ? "answers are" : "answer is"} correct (yours to judge, against the ${many ? "questions" : "question"} above); that it was asked only once — publishing the ${many ? "questions makes" : "question makes"} shopping visible, not impossible; that the running image matches the published source (needs dstack-mr); the operator of the enclave can read the transcript in the clear.</p>
 
 <footer><a href="${base}/">this attest-proxy instance</a> · <a href="https://github.com/amiller/attest-proxy">what attest-proxy is (github)</a></footer>
 </div></body></html>`;
