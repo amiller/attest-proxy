@@ -1348,6 +1348,9 @@ function claimPage(body: Record<string, unknown>, id: string, base: string, quot
     quoteAvailable ? `chain to Intel's root, TCB status and revocation, via dcap-qvl` : "",
   ].filter(Boolean).map((t) => `<div>${t}</div>`).join("");
 
+  const hasDoc = qs.some((qq) => Boolean((qq.document as { name?: string } | undefined)?.name));
+  const promptParts = `a one-line framing plus your ${many ? "questions" : "question"}${hasDoc ? " and your document" : ""}`;
+
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>attest-proxy claim ${id.slice(0, 8)}</title>
@@ -1374,7 +1377,9 @@ box-shadow:0 1px 0 #fff inset,0 6px 24px rgba(30,45,50,.07);padding:26px 30px 30
 .seal{font-size:11px;color:${quoteAvailable ? "var(--good)" : "var(--no)"};display:flex;align-items:center;gap:5px}
 .seal .dot{width:7px;height:7px;border-radius:50%;background:${quoteAvailable ? "var(--good)" : "var(--no)"};display:inline-block}
 .cid{font-family:var(--mono);font-size:11px;color:var(--faint);margin:3px 0 0;word-break:break-all}
-.scope{font-size:13px;color:var(--mut);margin:16px 0 0}
+.how{font-size:13px;color:var(--mut);margin:16px 0 0}
+.how b{color:var(--ink)}
+.scope{font-size:13px;color:var(--mut);margin:9px 0 0}
 .scope b{color:var(--ink)}
 .dash{border:0;border-top:1px dashed var(--rule);margin:20px 0}
 .sec{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--faint);font-weight:700;margin:0 0 12px}
@@ -1414,12 +1419,13 @@ footer a:hover{color:var(--ac)}
 <span class="seal"><span class="dot"></span>${quoteAvailable ? "sealed" : "DEV — not attested"}</span></div>
 <div class="cid">${host} / claim / ${id}</div>
 
+<p class="how"><b>What ran:</b> one direct API call to ${esc(models)} from inside the enclave — not an agent and not Claude Code, so no tools, no web, no prior conversation. The enclave composed the whole prompt itself: ${promptParts}, and recorded the one reply.</p>
 <p class="scope"><b>What this record certifies:</b> the exchange below took place exactly as shown, in a sealed context with nothing else in it. It takes no position on whether the ${many ? "answers are" : "answer is"} right.</p>
 
 <hr class="dash">
 <div class="sec">The exchange <span class="sub">— read it, judge it yourself</span></div>
 ${xq}
-<p class="pn">This was the entire prompt — no prior turns, no hidden setup, and <b>no tools, no web, no retrieval</b>. Each answer is the model's own recall, nothing looked up.</p>
+<p class="pn">Everything above is the whole prompt; the ${many ? "answers are" : "answer is"} the model's own recall, nothing looked up.</p>
 
 <hr class="dash">
 <div class="sec">Guaranteed by the record <span class="sub">— your agent re-derives each</span></div>
