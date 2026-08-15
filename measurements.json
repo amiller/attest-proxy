@@ -1,8 +1,9 @@
 {
-  "note": "Git-tracked expected base-image TDX measurements for the deployed dstack image. mrtd + rtmr0-2 are the base image identity (stable across app deploys); recorded from a dcap-qvl-verified-genuine quote and independently reproducible with dstack-mr. rtmr3 is app-specific and not pinned here.",
+  "note": "Expected base-image TDX measurements for the published dstack release. os_image_hash matches meta-dstack v0.5.8 release digest.txt. mrtd/rtmr1/rtmr2 REPRODUCED from that release with dstack-mr (dstack-mr -metadata metadata.json -cpu 2 -memory 4G), byte-identical. rtmr0 is the release value from a genuine quote; reproducing it needs dstack's acpi-tables build (Rust dstack-mr-cli + patched QEMU 8.2.2), not yet run here. rtmr3 is app/daemon-specific and checked by event-log replay in verify-quote, not pinned.",
   "image": "dstack-0.5.8-6427f4f5",
   "os_image_hash": "6427f4f5ded88b72d326bd973e581c1689c5080c6444a0cf90fec7d9e4c8b92a",
-  "recorded_from_commit": "2c851eba8b698c6996ea989a0373b4e36bf2aa72",
+  "os_image_source": "https://github.com/Dstack-TEE/meta-dstack/releases/download/v0.5.8/dstack-0.5.8.tar.gz",
+  "reproduced_via": "github.com/kvinwang/dstack-mr@v0.5.1",
   "mrtd": "f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077",
   "rtmr0": "027b610ab0555482f8a3868524093bdf3cdbe2539f81dfeeb886864654cb2fe3422f7fc36d4bab6fa46683aad11d1ba7",
   "rtmr1": "b598fde9491427341bc4683b75d10d3e36770af3a36a6954d8b6b7b22aa66358f13e1f172e51b7d6e6710d99a8d8532f",

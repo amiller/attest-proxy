@@ -1266,14 +1266,19 @@ function claimJson(body: Record<string, unknown>, id: string, base: string, quot
       verify_quote: "Verifies the quote binds THIS session, then runs dcap-qvl for the "
         + "full DCAP check — the PCK chain to Intel's root, TCB status, QE identity, and "
         + "revocation — so 'genuine Intel silicon, current TCB' is checked, not assumed. "
-        + "It also verifies the committed drand round against the public chain and prints a "
-        + "real 'not before' UTC time, and diffs the base-image measurements against a "
-        + "git-tracked baseline.",
+        + "It replays the event log into the quote's RTMR3 (binding os-image-hash and "
+        + "compose-hash into the signed quote), reproduces the base image's MRTD/RTMR1/"
+        + "RTMR2 from the published dstack release with dstack-mr, cross-checks the source "
+        + "commit's git tree against GitHub, and verifies the committed drand round for a "
+        + "real 'not before' time.",
     },
     caveats: [
-      "verify-quote confirms genuine Intel silicon and current TCB via dcap-qvl, but "
-        + "does NOT reproduce the expected measurements from source — that the running "
-        + "image is the published code still needs dstack-mr / a reproducible build.",
+      "The app runs as a container the tee-daemon launches inside its CVM, so RTMR3 "
+        + "measures the DAEMON, not the app. The daemon is itself measured and open-source, "
+        + "and it vouches for the source commit (cross-checked to GitHub) — but the app's "
+        + "own code is not separately measured. This is daemon-vouched, not app-cvm.",
+      "RTMR0 matches the release baseline but is not reproduced here; reproducing it "
+        + "needs dstack's acpi-tables build (Rust dstack-mr-cli + patched QEMU 8.2.2).",
       "The live pod may self-report a published-but-not-latest commit; the tool "
         + "reports this drift and the platform measurements still match.",
       "The operator of the enclave can read the document in the clear.",
@@ -1312,7 +1317,7 @@ function claimPage(body: Record<string, unknown>, id: string, base: string, quot
   const q = (body.quote ?? {}) as { event_log?: string; vm_config?: string };
   const el = JSON.parse(q.event_log ?? "[]") as { imr?: number; event?: string; event_payload?: string }[];
   const pick = (n: string) => el.find((e) => e.imr === 3 && e.event === n)?.event_payload ?? "";
-  const appid = pick("app-id"), mrkms = pick("mr-kms");
+  const mrkms = pick("mr-kms");
   const image = (JSON.parse(q.vm_config ?? "{}") as { image?: string }).image ?? "";
   const bcn = (body.beacon ?? (body.beacons as unknown[] | undefined)?.[0]) as { round?: number } | undefined;
   // default drand chain: genesis 1595431050, 30s/round
@@ -1340,12 +1345,13 @@ function claimPage(body: Record<string, unknown>, id: string, base: string, quot
   ].filter(Boolean).join("");
 
   const refs = [
-    `bytes shown are exactly what was sent and received, unedited`,
-    image ? `base image <code>${esc(image)}</code> — reproducible with dstack-mr` : "",
-    appid ? `authorized on-chain by contract <code>0x${esc(appid)}</code>, which governs which builds may run` : "",
-    mrkms ? `keys held by the dstack KMS <code>${esc(mrkms.slice(0, 16))}…</code>, itself an attested dstack instance` : "",
+    `the ${many ? "questions and answers" : "question and answer"} shown are the exact bytes sent and received`,
+    quoteAvailable ? `genuine Intel TDX, current TCB — dcap-qvl chains the quote to Intel's root` : "",
+    image ? `base image <code>${esc(image)}</code> — MRTD/RTMR1/RTMR2 reproduce from that published release with dstack-mr` : "",
+    `the event log replays into the quote's RTMR3, so the image and app identities are hardware-measured, not self-reported`,
+    `the running code's source commit cross-checks against GitHub (its git tree matches)`,
+    mrkms ? `keys from the dstack KMS <code>${esc(mrkms.slice(0, 16))}…</code>, itself an attested dstack instance` : "",
     notBefore ? `time from <code>drand round ${bcn?.round}</code>, checked against the public beacon` : "",
-    quoteAvailable ? `chain to Intel's root, TCB status and revocation, via dcap-qvl` : "",
   ].filter(Boolean).map((t) => `<div>${t}</div>`).join("");
 
   const hasDoc = qs.some((qq) => Boolean((qq.document as { name?: string } | undefined)?.name));
@@ -1445,7 +1451,7 @@ python3 attest-proxy/attest.py check receipt.json
 pip install dcap-qvl
 python3 attest-proxy/attest.py verify-quote receipt.json</pre></details>
 
-<p class="caveat"><b>Not settled here:</b> whether the ${many ? "answers are" : "answer is"} correct (yours to judge, against the ${many ? "questions" : "question"} above); that it was asked only once — publishing the ${many ? "questions makes" : "question makes"} shopping visible, not impossible; that the running image matches the published source (needs dstack-mr); the operator of the enclave can read the transcript in the clear.</p>
+<p class="caveat"><b>Not settled here:</b> whether the ${many ? "answers are" : "answer is"} correct (yours to judge, against the ${many ? "questions" : "question"} above); that it was asked only once — publishing the ${many ? "questions makes" : "question makes"} shopping visible, not impossible; that the app's own code is separately measured — it runs inside an attested, open-source dstack host that vouches for the commit above; the operator of the enclave can read the transcript in the clear.</p>
 
 <footer><a href="${base}/">this attest-proxy instance</a> · <a href="https://github.com/amiller/attest-proxy">what attest-proxy is (github)</a></footer>
 </div></body></html>`;

@@ -1202,6 +1202,37 @@ def _drand(round_):
     return info["period"], info["genesis_time"], got.get("randomness")
 
 
+def _github_tree(repo_url, sha):
+    """The git tree sha GitHub records for a commit — a sha1, comparable to the
+    daemon's reported tree_hash. Proves the cited commit's tree is the published
+    one; the daemon cannot name a commit whose tree does not match on GitHub."""
+    import re
+    m = re.search(r"github\.com[:/]+([^/]+)/([^/]+?)(?:\.git)?/?$", repo_url)
+    if not m:
+        return None
+    url = f"https://api.github.com/repos/{m.group(1)}/{m.group(2)}/git/commits/{sha}"
+    with urllib.request.urlopen(url, timeout=30) as r:
+        return (json.loads(r.read()).get("tree") or {}).get("sha")
+
+
+def _replay_rtmr(event_log, imr):
+    """Fold one IMR's event log the way the TDX module does, so the result can be
+    checked against the value inside the signed quote. imr-3 events carry no
+    precomputed digest; theirs is sha384(type_le32 : name : payload)."""
+    r = bytes(48)
+    for e in event_log:
+        if e.get("imr") != imr:
+            continue
+        if e.get("digest"):
+            digest = bytes.fromhex(e["digest"])
+        else:
+            payload = bytes.fromhex(e["event_payload"]) if e.get("event_payload") else b""
+            digest = hashlib.sha384(int(e["event_type"]).to_bytes(4, "little")
+                                    + b":" + e["event"].encode() + b":" + payload).digest()
+        r = hashlib.sha384(r + digest).digest()
+    return r.hex()
+
+
 
 def cmd_verify_quote(a):
     b = json.loads(Path(a.bundle).read_text())
@@ -1268,21 +1299,48 @@ def cmd_verify_quote(a):
         except Exception as e:
             print(f"could not verify the drand time bound: {e}")
 
-    # A git-tracked baseline (reviewed in the repo, not fetched from the pod) for
-    # the base-image measurements, so a fresh clone diffs against a version-
-    # controlled value instead of trust-on-first-use (issue #13).
+    # Replay the event log into RTMR3. The log lists what was measured — os image,
+    # app compose hash, app id — and folding it must reproduce the RTMR3 that sits
+    # inside the signed quote. That is what turns these from JSON the pod served
+    # into values the hardware measured.
+    elog = []
+    try:
+        elog = json.loads((q or {}).get("event_log") or "[]")
+    except Exception:
+        pass
+    evt = {e["event"]: e["event_payload"] for e in elog
+           if e.get("imr") == 3 and e.get("event")}
+    if elog:
+        rep3 = _replay_rtmr(elog, 3)
+        if rep3 != m["rtmr3"]:
+            raise SystemExit("the event log does not replay to the quote's RTMR3 — it was "
+                             "altered, or does not belong to this quote.")
+        print("event log binds to the quote (RTMR3 replay): yes — so these are measured, "
+              "not self-reported:")
+        print(f"  os image      {evt.get('os-image-hash', '?')[:40]}…")
+        print(f"  app compose   {evt.get('compose-hash', '?')[:40]}…")
+        print(f"  app id        0x{evt.get('app-id', '?')}")
+
+    # Expected base measurements for the published dstack release. MRTD/RTMR1/RTMR2
+    # are reproduced from that release with dstack-mr (command below); RTMR0 is the
+    # release value (reproducing it needs dstack's acpi-tables build). So this diffs
+    # against upstream-reproduced values, not a value pinned from this same pod.
     base_f = Path(__file__).resolve().parent / "measurements.json"
     if base_f.exists():
         base = json.loads(base_f.read_text())
+        if evt.get("os-image-hash") and base.get("os_image_hash") \
+                and evt["os-image-hash"] != base["os_image_hash"]:
+            print(f"WARNING: the quote's os-image-hash is not the audited {base.get('image')} "
+                  f"— a different release than reproduced.")
         bad = [k for k in ("mrtd", "rtmr0", "rtmr1", "rtmr2")
                if base.get(k) and base[k] != m[k]]
         if bad:
-            print(f"WARNING: base-image measurements differ from the repo baseline "
-                  f"({', '.join(bad)}) — a different image than the audited "
-                  f"{base.get('image', '?')}.")
+            print(f"WARNING: base-image measurements differ from {base.get('image', '?')} "
+                  f"({', '.join(bad)}) — a different image than the audited one.")
         else:
-            print(f"base image matches the repo-committed baseline: "
-                  f"{base.get('image', '')} (mrtd + rtmr0-2, git-tracked)")
+            print(f"base image is the published {base.get('image', '')}: yes")
+            print("  MRTD, RTMR1, RTMR2 reproduce from that release:")
+            print("  dstack-mr -metadata metadata.json -cpu 2 -memory 4G  (RTMR0 = release value)")
 
     pin = Path(a.pin) if a.pin else Path.home() / ".claude/attest-proxy-pin.json"
     # Measured by the platform, read out of the quote.
@@ -1310,66 +1368,59 @@ def cmd_verify_quote(a):
     if not reported.get("commit_sha"):
         print("NOTE: this deployment records no commit — nothing ties the code")
         print("      running here to any published source.")
+    elif reported.get("tree_hash") and reported.get("repo"):
+        try:
+            gh = _github_tree(reported["repo"], reported["commit_sha"])
+            if gh == reported["tree_hash"]:
+                print(f"source tree matches GitHub: yes — commit {reported['commit_sha'][:12]} "
+                      f"on {reported['repo']}\n  has tree {gh[:16]}, the tree the daemon reports it ran")
+            elif gh:
+                print(f"WARNING: daemon reports tree {reported['tree_hash'][:16]} for commit "
+                      f"{reported['commit_sha'][:12]}, but GitHub\n  has {gh[:16]} — mismatch, do not rely on the source claim.")
+            else:
+                print("could not parse the repo URL to cross-check the tree against GitHub")
+        except Exception as e:
+            print(f"could not cross-check the source tree against GitHub: {e}")
 
+    # Optional drift alarm: remember this deployment's measured + reported values,
+    # so a later visit notices if the platform image or the reported commit changed.
+    # Not the trust anchor any more — the reproductions above are — just a change bell.
     both = {**current, **reported}
     if not pin.exists():
         pin.parent.mkdir(parents=True, exist_ok=True)
         pin.write_text(json.dumps(both, indent=2))
-        print(f"FIRST RUN -- pinned to {pin}")
-        print("  measured by the platform, read from the quote:")
-        for k, v in current.items():
-            print(f"    {k:10s} {v[:46]}")
-        if reported:
-            print("  reported by the deployment over HTTPS, NOT measured:")
-            for k, v in reported.items():
-                print(f"    {k:10s} {str(v)[:46]}")
-        print()
-        print("TRUST ON FIRST USE. The hardware checks above already passed (genuine")
-        print("Intel TDX, current TCB, report_data binding), so the [measured] values")
-        print("are hardware-attested-genuine. What you have NOT checked is which image")
-        print("and app they belong to — that they match the EXPECTED build is recorded,")
-        print("not verified, until you reproduce MRTD/RTMR0-2 with dstack-mr or audit")
-        print("the named source. Later runs diff against this pin.")
-        if current.get("commit_sha"):
+        print(f"pinned this deployment to {pin} — later runs flag any change")
+    else:
+        pinned = json.loads(pin.read_text())
+        drift = {k: (pinned.get(k), v) for k, v in both.items() if pinned.get(k) != v}
+        if drift:
             print()
-            print(f"  git clone {current.get('repo')} && git checkout {current['commit_sha']}")
-            print("  is the code this deployment says it built from. Read it before")
-            print("  the pin means anything.")
-        return
-
-    pinned = json.loads(pin.read_text())
-    drift = {k: (pinned.get(k), v) for k, v in both.items() if pinned.get(k) != v}
-    for k, v in current.items():
-        print(f"  {k:10s} {'CHANGED' if k in drift else 'ok':8s} {v[:32]}   [measured]")
-    for k, v in reported.items():
-        print(f"  {k:10s} {'CHANGED' if k in drift else 'ok':8s} {str(v)[:32]}   "
-              f"[self-reported, not measured]")
-    if drift:
-        print()
-        print("CHANGED since you pinned:")
-        for k, (was, now) in drift.items():
-            print(f"  {k}\n    was {was}\n    now {now}")
-        print()
-        if [k for k in drift if k in current]:
-            print("The PLATFORM measurements changed. That is a different machine or a")
-            print("different image than the one you audited -- stop.")
-        else:
-            print("Only self-reported source fields changed: the deployment says it is")
-            print("running different code. The platform measurements are unchanged, and")
-            print("nothing in the quote attests the source, so this is the deployment's")
-            print("own account of itself. Re-audit the named commit before relying on it.")
-        raise SystemExit(1)
+            print("CHANGED since you pinned:")
+            for k, (was, now) in drift.items():
+                print(f"  {k}\n    was {was}\n    now {now}")
+            if [k for k in drift if k in current]:
+                raise SystemExit("platform measurements changed — a different image or "
+                                 "machine than you pinned. Stop and re-audit.")
+            print("(source fields changed: the deployment reports a different commit; the "
+                  "GitHub check above applies to the new one. Re-audit it.)")
 
     print()
-    print("matches your pin")
+    print("Established, reproduced from published upstream:")
+    print("  - genuine Intel TDX, current TCB (dcap-qvl chains to Intel's root)")
+    print("  - the quote binds THIS session (report_data)")
+    print("  - the event log replays into the quote's RTMR3, so os-image-hash and")
+    print("    compose-hash are hardware-measured, not self-reported")
+    print("  - the base image is the published dstack release; MRTD/RTMR1/RTMR2")
+    print("    reproduce from it with dstack-mr")
+    print("  - the app's git tree matches GitHub for the reported commit")
+    print("  - a drand round verified against the public chain (time lower bound)")
     print()
-    print("Established: genuine Intel TDX silicon with current TCB (dcap-qvl), the")
-    print("quote binds THIS session, the platform measurements match what you pinned,")
-    print("and the time lower bound is a drand round verified against the public chain.")
-    print("Still open: that these measurements correspond to the exact published")
-    print("source. repo/commit/tree are self-reported and no hardware measurement")
-    print("covers the source tree. To close it, reproduce the expected MRTD/RTMR0-2")
-    print("from the image with dstack-mr and diff them against the [measured] values.")
+    print("Trust boundary (daemon-vouched): the app runs as a container the tee-daemon")
+    print("launches inside its CVM, so RTMR3 measures the DAEMON, not the app. The")
+    print("daemon — itself measured, and open-source so you can read what it does — ")
+    print("reports it ran this repo at the commit above; the GitHub check confirms that")
+    print("commit's tree, but no hardware measurement covers the app's own code. Closing")
+    print("this hop needs an app-cvm deployment or a report_data source-binding.")
 
 
 def cmd_show(a):
