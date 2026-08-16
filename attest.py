@@ -1357,9 +1357,11 @@ def cmd_verify_quote(a):
     # a counterparty's agent, which found repo and commit_sha empty on a tarball
     # deploy and concluded — correctly — that "runs the published code" was
     # unbacked. Deploy from source, not a tarball, or this stays empty.
+    vrec = {}
     try:
         with urllib.request.urlopen(f"{a.cvm}/_api/verification/attest-proxy", timeout=30) as r:
-            src = (json.loads(r.read()).get("app") or {}).get("source") or {}
+            vrec = json.loads(r.read())
+        src = (vrec.get("app") or {}).get("source") or {}
         for k in ("repo", "ref", "commit_sha", "tree_hash"):
             if src.get(k):
                 reported[k] = src[k]
@@ -1381,6 +1383,38 @@ def cmd_verify_quote(a):
                 print("could not parse the repo URL to cross-check the tree against GitHub")
         except Exception as e:
             print(f"could not cross-check the source tree against GitHub: {e}")
+
+    # RFC 0027 daemon-vouched binding: the source commit is bound into a hardware-
+    # signed quote's report_data, so the daemon cannot forge which commit it ran.
+    # Check it against the raw quote bytes and this same CVM, not the served JSON.
+    kind = vrec.get("attestation_kind", "")
+    binding = (vrec.get("app") or {}).get("binding") or {}
+    bq = (binding.get("binding_quote") or {}).get("quote", "")
+    if bq:
+        pre = binding.get("preimage", {})
+        h = hashlib.sha512()
+        h.update(b"tee-daemon/app-attest/v1")
+        for f in ("app_id", None, "tree_hash", "app_pubkey"):
+            if f is None:
+                h.update(pre.get("name", "").encode())
+            else:
+                h.update(bytes.fromhex(pre.get(f, "").removeprefix("0x")))
+        bqm = parse_quote(bytes.fromhex(bq))
+        got, expect = bqm["report_data"][:128], h.hexdigest()
+        belog = json.loads((binding["binding_quote"].get("event_log")) or "[]")
+        laid = next((e["event_payload"] for e in belog
+                     if e.get("imr") == 3 and e.get("event") == "app-id"), "")
+        aid_ok = pre.get("app_id", "").removeprefix("0x") == laid
+        same_cvm = all(bqm[k] == m[k] for k in ("mrtd", "rtmr0", "rtmr1", "rtmr2"))
+        _dcap_verify(bytes.fromhex(bq))  # genuine TDX or it raises
+        if got == expect and aid_ok and same_cvm:
+            print(f"source binding ({kind}): yes — a genuine TDX quote from THIS CVM binds")
+            print(f"  the reported commit's tree into report_data; the daemon cannot forge it")
+        else:
+            raise SystemExit(f"RFC 0027 binding FAILED (rd_match={got==expect} "
+                             f"app_id={aid_ok} same_cvm={same_cvm}) — do not rely on the source claim")
+    elif kind:
+        print(f"NOTE: attestation_kind={kind} but no binding block served")
 
     # Optional drift alarm: remember this deployment's measured + reported values,
     # so a later visit notices if the platform image or the reported commit changed.
@@ -1417,10 +1451,10 @@ def cmd_verify_quote(a):
     print()
     print("Trust boundary (daemon-vouched): the app runs as a container the tee-daemon")
     print("launches inside its CVM, so RTMR3 measures the DAEMON, not the app. The")
-    print("daemon — itself measured, and open-source so you can read what it does — ")
-    print("reports it ran this repo at the commit above; the GitHub check confirms that")
-    print("commit's tree, but no hardware measurement covers the app's own code. Closing")
-    print("this hop needs an app-cvm deployment or a report_data source-binding.")
+    print("daemon — itself measured, and open-source so you can read what it does —")
+    print("binds the commit it ran into a hardware-signed quote (the source binding")
+    print("above), so it cannot forge which commit ran; what a binding does NOT give you")
+    print("is the app's own code in the measured TCB — that needs an app-cvm deployment.")
 
 
 def cmd_show(a):
