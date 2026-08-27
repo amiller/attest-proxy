@@ -163,7 +163,7 @@ async function saveReceipts() {
 const enc = new TextEncoder();
 
 import {
-  concat, sha256, hex, latin1, unlatin1, b64,
+  MAX_LEAVES, concat, sha256, hex, latin1, unlatin1, b64,
   commitment, sessionMeta, merkleRoot, sessionRoot, inclusionProof,
 } from "./witness.ts";
 
@@ -183,6 +183,19 @@ const CHECK_HOST = "edge-tee.checker";
 
 /** Where an adjudication can be sent. The receipt names which answered, because
  *  "a named model said this" is only meaningful with the provider attached. */
+/** Hosts the witness will GET on a caller's behalf.
+ *
+ *  A model call is a POST the caller composed, so what it proves is about the
+ *  answer. A takeout is a GET whose whole value is *where the bytes came from*,
+ *  so the host is the claim rather than a detail of it. The commitment binds it
+ *  either way — `commitment(host, ...)` puts it in the preimage — so a verifier
+ *  reads the host out of the leaf and never has to trust this list; the list
+ *  only decides what this deployment is willing to spend a fetch on. */
+const FETCH_HOSTS = new Set([
+  "elicit.com",
+  "elicit-public-api-exports-prod.s3.us-east-1.amazonaws.com",
+]);
+
 const PROVIDERS: Record<string, { host: string; path: string }> = {
   anthropic: { host: "api.anthropic.com", path: "/v1/messages" },
   zai: { host: "api.z.ai", path: "/api/anthropic/v1/messages" },
@@ -693,6 +706,52 @@ function usageOf(wire: Uint8Array): Usage {
     u.cached += (g.cache_creation_input_tokens ?? 0) + (g.cache_read_input_tokens ?? 0);
   }
   return u;
+}
+
+/** GET one URL from inside the enclave and commit the exchange as a leaf.
+ *
+ *  The same commitment as `relay`, minus everything the model path needs and a
+ *  takeout does not: no betas, no credential replay for the checker, no usage
+ *  figures. An Authorization header is redacted to $APIKEY exactly as the model
+ *  path does it. A presigned query string is committed whole and deliberately:
+ *  the signature is what names the object, so redacting it would leave a leaf
+ *  that proves some bytes arrived without pinning which object they are.
+ */
+async function witnessFetch(sess: Session, role: string, target: URL,
+                            auth: string | null) {
+  const headers: Record<string, string> = { host: target.host, accept: "*/*" };
+  if (auth) headers.authorization = "$APIKEY";
+  const head = `GET ${target.pathname}${target.search} HTTP/1.1\r\n` +
+    Object.entries(headers).map(([k, v]) => `${k}: ${v}`).join("\r\n") +
+    `\r\nConnection: close\r\n\r\n`;
+  const redacted = enc.encode(head);
+
+  const t0 = Date.now();
+  // `host` is forbidden to fetch() and belongs only in the committed transcript.
+  const out: Record<string, string> = { accept: "*/*" };
+  if (auth) out.authorization = auth;
+  const upstream = await fetch(target.href, { method: "GET", headers: out });
+  const respBody = new Uint8Array(await upstream.arrayBuffer());
+  const statusLine = `HTTP/1.1 ${upstream.status} ${upstream.statusText}\r\n`;
+  const respHeaders = [...upstream.headers].map(([k, v]) => `${k}: ${v}`).join("\r\n");
+  const wire = concat(enc.encode(statusLine + respHeaders + "\r\n\r\n"), respBody);
+
+  const c = await commitment(target.host, redacted, wire);
+  sess.calls.push({
+    n: sess.calls.length + 1,
+    ts: new Date().toISOString(),
+    host: target.host,
+    request_redacted: latin1(redacted),
+    response_b64: b64(wire),
+    commitment: hex(c),
+    seconds: (Date.now() - t0) / 1000,
+  });
+  sess.owner.push(role);
+  return {
+    n: sess.calls.length, host: target.host, path: target.pathname,
+    status: upstream.status, bytes: respBody.length,
+    sha256_body: hex(await sha256(respBody)), commitment: hex(c),
+  };
 }
 
 async function relay(sess: Session, role: string, path: string, req: Request,
@@ -2273,6 +2332,30 @@ export default async function handler(
     return json({ ...receipt, kind: "edge-tee adjudication", verdict, instruction,
                   model, provider: providerName, prompt_parts: disclosed,
                   id, claim_url: `${publicBase}/claim/${id}` });
+  }
+
+  // POST /fetch  {token, url}, upstream credential in X-Upstream-Authorization.
+  // One leaf per call, in the same tree as everything else, so a takeout can be
+  // interleaved with model calls and disclosed as one contiguous range.
+  if (req.method === "POST" && path === "/fetch") {
+    const b = await req.json().catch(() => ({}));
+    const at = byToken.get(String(b.token ?? ""));
+    if (!at) return json({ error: "unknown or closed session token" }, 401);
+    const { sess, idx } = at;
+    if (sess.turn !== idx) return json({ error: "not your turn" }, 409);
+    if (sess.calls.length >= MAX_LEAVES) {
+      return json({ error: `session full (${MAX_LEAVES} leaves)` }, 409);
+    }
+    let target: URL;
+    try { target = new URL(String(b.url ?? "")); }
+    catch { return json({ error: "url required, absolute" }, 400); }
+    if (target.protocol !== "https:") return json({ error: "https only" }, 400);
+    if (!FETCH_HOSTS.has(target.host)) {
+      return json({ error: `not a witnessed host: ${target.host}`,
+                    allowed: [...FETCH_HOSTS] }, 400);
+    }
+    const auth = req.headers.get("x-upstream-authorization");
+    return json(await witnessFetch(sess, sess.parties[idx].role, target, auth));
   }
 
   if (req.method === "POST" && path === "/recorder") {
