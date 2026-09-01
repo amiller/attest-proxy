@@ -1147,7 +1147,7 @@ header{padding:56px 0 22px;border-bottom:2px solid var(--ink)}
 .eb{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;
 color:var(--muted);margin:0 0 14px}
 h1{font-size:34px;line-height:1.14;margin:0 0 14px;letter-spacing:-.015em}
-.stand{color:var(--muted);font-size:18px;margin:0}
+.stand{color:var(--muted);font-size:18px;margin:0 0 14px}
 h2{font-size:21px;margin:38px 0 12px}
 p{margin:0 0 14px}
 code{font-family:var(--mono);font-size:.86em;background:#F1F3F5;padding:1px 5px;border-radius:3px}
@@ -1162,15 +1162,24 @@ footer{margin-top:44px;padding-top:16px;border-top:1px solid var(--rule);
 font-family:var(--mono);font-size:12px;color:var(--muted)}
 </style></head><body><div class="w">
 <header>
-<p class="eb">edge-tee · attest-proxy</p>
-<h1>A model's answer, with the whole prompt attached</h1>
-<p class="stand">You ask a model to settle a question, then paste the answer into the chat.
-The other side asks the obvious thing: what else was in the context? Here the enclave builds
-the request itself — your instruction, your document, nothing else — and hands back the answer
-with a receipt carrying the whole prompt. Whoever you send it to reads your question, confirms
-nothing else was there, and sees which model replied, from the provider's own response. You
-bring your own credential; this service holds none.</p>
+<p class="eb">attest-proxy</p>
+<h1>A witness between you and a model API</h1>
+<p class="stand">attest-proxy is a witness that sits between you and a model API, inside an
+Intel TDX enclave. It builds the request there — your instruction, your document, nothing
+else — terminates the TLS session against the provider, and seals the exact bytes under a
+hardware quote. Back comes the answer, and a receipt anyone can check.</p>
+<p class="stand">So when you settle a question with a model and hand someone the answer, they
+do not have to take your word for the prompt. They read what you asked, confirm nothing else
+was in the context, and see which model replied — from the provider's own response. You bring
+your own credential; this service holds none.</p>
 </header>
+
+<h2>Ask a question you can hand over</h2>
+<p>The enclave composes the request from your instruction and your document and nothing
+else, so the whole input fits in the receipt and is short enough for a sceptic to read.</p>
+<pre>attest.py adjudicate --instruction question.md --doc case.md --model fable</pre>
+<p>Or paste the invite URL into Claude Code and describe what you want; it will work the
+rest out. Nothing to install if you have Claude Code already.</p>
 
 <h2>Status</h2>
 <table><tbody>
@@ -1179,13 +1188,6 @@ bring your own credential; this service holds none.</p>
 <tr><th>session gate</th><td>${badge(state.gated, "invite token required", "closed — no SESSION_TOKEN set")}</td></tr>
 <tr><th>attestation</th><td>${badge(state.attested, "attested — quotes issued over each root", "dev — NO quote is issued; nothing here is proof")}<br/><a href="../_api/verification/attest-proxy">/_api/verification/attest-proxy</a></td></tr>
 </tbody></table>
-
-<h2>Ask a question you can hand over</h2>
-<p>The enclave composes the request from your instruction and your document and nothing
-else, so the whole input fits in the receipt and is short enough for a sceptic to read.</p>
-<pre>attest.py adjudicate --instruction question.md --doc case.md --model fable</pre>
-<p>Or paste the invite URL into Claude Code and describe what you want; it will work the
-rest out. Nothing to install if you have Claude Code already.</p>
 
 <h2>Or record a whole session</h2>
 <p>A different job: evidence of work done rather than an answer to cite. Open a session, run
