@@ -904,9 +904,11 @@ function claims(quoteAvailable: boolean) {
     needsYou.push(
       "That the witness ran the published code. This manifest asserting it proves nothing: "
       + "the assertion comes from the server you are evaluating. Fetch the verification "
-      + "record below, check the quote binds a CVM measurement you accept AND this "
-      + "project's source hash, and pin that hash. Unpinned, this is a claim you have "
-      + "read rather than one you have checked; describe it that way.");
+      + "record below, check the quote binds a CVM measurement you accept, and confirm the "
+      + "source commit the daemon vouches for, cross-checked against GitHub — the app runs "
+      + "as a container the daemon launches, so it is not itself measured in the quote — then "
+      + "pin it. Unpinned, this is a claim you have read rather than one you have checked; "
+      + "describe it that way.");
   } else {
     mayNot.unshift(
       "that any of this is attested — this deployment is in dev mode and issues NO quote",
@@ -931,7 +933,7 @@ function claims(quoteAvailable: boolean) {
     verify_independently: {
       verification_record: `${PUBLIC_ORIGIN}/_api/verification/attest-proxy`,
       note: quoteAvailable
-        ? "Check the quote binds a CVM measurement you accept AND this project's source hash, then pin that hash."
+        ? "Check the quote binds a CVM measurement you accept, confirm the daemon-vouched source commit against GitHub, then pin it."
         : "Public verifier endpoints only open once a project is promoted to attested. "
           + "While this deployment is in dev mode there is no second source to corroborate "
           + "the mode against — the dev-mode reading is this service's own claim about itself.",
@@ -977,7 +979,7 @@ padding:14px 16px;overflow-x:auto;margin:0 0 15px}
 a{color:var(--a)}
 footer{margin-top:40px;padding-top:15px;border-top:1px solid var(--r);font-family:var(--mono);font-size:12px;color:var(--m)}
 </style></head><body><div class="w">
-<header><p class="eb">edge-tee · invite · ${inv.label}</p>
+<header><p class="eb">invite · ${inv.label}</p>
 <h1>Send an agent into a witness</h1>
 <p class="stand">Ask a model about a document inside a sealed enclave that builds the request itself,
 and get back a receipt carrying the whole prompt — so whoever you send it to can read your question and
@@ -1051,7 +1053,7 @@ blockquote{margin:0 0 14px;padding:2px 0 2px 18px;border-left:3px solid var(--r)
 a{color:var(--a)}
 footer{margin-top:40px;padding-top:15px;border-top:1px solid var(--r);font-family:var(--mono);font-size:12px;color:var(--m)}
 </style></head><body><div class="w">
-<header><p class="eb">edge-tee · round trip · turn ${sess.seq + 1}</p>
+<header><p class="eb">round trip · turn ${sess.seq + 1}</p>
 <h1>Take a turn in a witnessed thread</h1>
 <p class="stand">Someone opened a thread about a document and invited you into it. Your agent works
 on <em>your</em> subscription; the witness records both sides' calls as leaves of one tree, in order,
