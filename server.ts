@@ -1224,8 +1224,8 @@ both journeys, and the asymmetry a responder should weigh before forwarding a cr
 witness their counterparty operates.</p>
 
 <h2>What a bundle proves</h2>
-<p>Token counts and the model name come back inside Anthropic's own response, over a TLS
-session terminated here against a pinned root — they are Anthropic's statement, not the
+<p>Token counts and the model name come back inside the provider's own response, over a TLS
+session terminated here against a pinned root — they are the provider's statement, not the
 holder's. The call count is signed, so a partial disclosure still proves the total. A drand
 round is folded in at session open, so the session provably did not run before it.</p>
 <p>It does not prove that the described <em>character</em> of the work is accurate; that needs a
@@ -1233,12 +1233,16 @@ checker run over the transcript, and attestation would show the checker ran, not
 verdict is right.</p>
 
 <h2>Confidentiality</h2>
-<p>This runs in a confidential VM. A counterparty should check the quote binds a CVM
-measurement they accept <em>and</em> the source hash of this app, then pin that hash. The
-operator holds deploy rights, so pinning and re-checking is what makes a swap visible rather
-than silent.</p>
+<p>This runs in a confidential VM. The quote binds the CVM's own measurement — the dstack
+base image, and an event log carrying the os-image and compose hashes — not this app's code
+directly: the app is a container the tee-daemon launches, so what RTMR3 measures is the
+daemon. The daemon is measured and open-source, and it vouches for the source commit, which
+<code>verify-quote</code> cross-checks against GitHub. So a counterparty checks the quote
+binds a CVM measurement they accept, confirms the vouched commit, and pins it. The operator
+holds deploy rights, so pinning and re-checking is what makes a swap visible rather than
+silent.</p>
 
-<footer>${state.attested ? "attested — a redeploy resets this to dev until re-promoted" : "dev mode — quotes are unavailable until this project is promoted to attested"}</footer>
+<footer>${state.attested ? "attested — a redeploy resets this to dev until re-promoted" : "dev mode — this instance is issuing no quote, so receipts here are not attested"}</footer>
 </div></body></html>`;
 }
 
